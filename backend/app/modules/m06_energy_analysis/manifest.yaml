@@ -1,14 +1,18 @@
-# M06 · 能耗分析（DoD 验证模块）
+# M06 · 能耗分析（DoD 验证模块 / 示例模块）
 # 按模块开发规范创建，验证「不改主框架 30 分钟跑通」
+# 注意：当前为硬编码模拟数据，不接入真实 EMS；不作为对外演示动线模块
 
 code: m06_energy_analysis
-name: 能耗异常分析
+name: 能耗异常分析（示例）
 version: "1.0.0"
 category: data
 industry: manufacturing
 order: 50
 icon: bolt
-summary: 输入产线和时间段，输出能耗异常时段诊断与节能建议。
+# 示例模块标记：前端据此显示「示例数据」角标与横幅，演示动线不主动引导
+sample: true
+sample_notice: 本模块为能力演示，能耗数据为内置模拟数据，未接入真实 EMS 系统。
+summary: 输入产线和时间段，输出能耗异常时段诊断与节能建议（示例模块，模拟数据）。
 
 pain_points:
   - 能耗异常靠人工巡检发现晚，异常时段已造成浪费
@@ -36,6 +40,12 @@ input_schema:
 output_schema:
   type: object
   properties:
+    notice:
+      type: string
+      title: 数据说明
+    data_source:
+      type: string
+      title: 数据来源
     summary:
       type: string
       title: 分析结论
@@ -61,6 +71,7 @@ demo:
   suggested_questions:
     - A线最近一周有没有能耗异常
     - 哪条产线 9 月份能耗最高
+  script_file: seed/demo_scripts.json
 
 deployment_requirements:
   data_needed:

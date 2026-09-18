@@ -27,7 +27,7 @@ from fastapi import Request
 from fastapi.responses import StreamingResponse
 
 from app.config import settings
-from app.core import audit
+from app.core import audit, demo_script
 from app.core.llm_gateway import get_gateway
 from app.core.rag.retriever import get_service
 from app.core.rag.reranker import rerank
@@ -256,28 +256,7 @@ async def _stream_chunks(text: str, delay: float = 0.03) -> AsyncIterator[str]:
         await asyncio.sleep(delay)
 
 
-# ===== DEMO 剧本降级（仅在 LLM 不可用时使用）=====
-
-def _load_demo_scripts() -> list[dict]:
-    p = MODULE_DIR / "seed" / "demo_scripts.json"
-    if not p.exists():
-        return []
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return []
-
-
-def _match_demo_script(question: str) -> Optional[dict]:
-    """按关键词匹配剧本（仅 LLM 不可用时降级使用）。"""
-    scripts = _load_demo_scripts()
-    if not scripts or not question:
-        return None
-    for s in scripts:
-        for kw in s.get("keywords", []):
-            if kw in question:
-                return s
-    return None
+# ===== DEMO 剧本降级（平台级匹配器 core/demo_script，§2.2）=====
 
 
 # ===== 主入口 =====
@@ -323,6 +302,45 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                 yield sse_event("done", {"latency_ms": audit.now_ms() - start_ms, "tokens": {"in": 0, "out": 0}})
                 return
 
+            # ===== ⓪ 剧本模式（§2.2）：DEMO 无 Key → 平台匹配器直出剧本答案+引用 =====
+            if demo_script.is_active_for_request(request):
+                scripted = demo_script.match(MODULE_CODE, question)
+                if not scripted:
+                    msg = demo_script.not_matched_message(MODULE_CODE)
+                    async for piece in demo_script.simulated_chunks(msg, chunk_size=12):
+                        yield sse_event("chunk", {"text": piece})
+                    yield sse_event("result", {"structured": {"answer": msg, "citations": []}})
+                    latency = audit.now_ms() - start_ms
+                    yield sse_event("done", {"latency_ms": latency, "tokens": {"in": 0, "out": 0}})
+                    audit.audit_log(
+                        module_code=MODULE_CODE, action="invoke", question=question,
+                        answer=msg, citations=[], latency_ms=latency,
+                        status="degraded", trace_id=trace_id,
+                    )
+                    return
+
+                script_cites = scripted.get("citations") or []
+                for cite in script_cites:
+                    yield sse_event("citation", cite)
+                answer_text = str(scripted.get("answer", "") or "")
+                # §2.2 模拟流式：50–120ms 随机间隔
+                async for piece in demo_script.simulated_chunks(answer_text, chunk_size=12):
+                    yield sse_event("chunk", {"text": piece})
+                yield sse_event("result", {"structured": {
+                    "answer": answer_text,
+                    "citations": script_cites,
+                    "query_rewritten": None,
+                    "llm_used": False,
+                }})
+                latency = audit.now_ms() - start_ms
+                yield sse_event("done", {"latency_ms": latency, "tokens": {"in": 0, "out": 0}})
+                audit.audit_log(
+                    module_code=MODULE_CODE, action="invoke", question=question,
+                    answer=answer_text[:4000], citations=script_cites, latency_ms=latency,
+                    status="degraded", trace_id=trace_id,
+                )
+                return
+
             # ===== ① query 改写 =====
             rewritten = rewrite_query(question)
             logger.info("[M04] question=%r rewritten=%r", question, rewritten)
@@ -349,7 +367,7 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                     yield sse_event("chunk", {"text": msg})
                 yield sse_event(
                     "result",
-                    {"structured": {"answer": msg, "citations": [], "related": []}},
+                    {"structured": {"answer": msg, "citations": []}},
                 )
                 latency = audit.now_ms() - start_ms
                 yield sse_event("done", {"latency_ms": latency, "tokens": {"in": 0, "out": 0}})
@@ -410,8 +428,8 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                     llm_used = False
 
             if not llm_used:
-                # 降级：匹配 demo 剧本；命中则流式输出剧本答案
-                scripted = _match_demo_script(question)
+                # 降级（配了 Key 但 LLM 异常）：用平台匹配器尝试剧本答案
+                scripted = demo_script.match(MODULE_CODE, question)
                 if scripted:
                     answer_text = scripted.get("answer", "")
                     if stream and answer_text:
@@ -433,18 +451,13 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                     else:
                         yield sse_event("chunk", {"text": answer_text})
 
-            # ===== ⑧ result 事件：结构化输出 =====
-            related = [
-                {"doc": c.get("doc", ""), "version": c.get("version", ""), "clause": c.get("clause", "")}
-                for c in reranked[:3]
-            ]
+            # ===== ⑧ result 事件：结构化输出（related 已移除：与 citations 信息重叠）=====
             yield sse_event(
                 "result",
                 {
                     "structured": {
                         "answer": answer_text,
                         "citations": citations,
-                        "related": related,
                         "query_rewritten": rewritten if rewritten != question else None,
                         "llm_used": llm_used,
                     }

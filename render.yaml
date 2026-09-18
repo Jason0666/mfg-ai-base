@@ -1,0 +1,31 @@
+# Render 部署蓝图（§3.3）
+# 用法：GitHub 仓库连接 Render 后选择此 render.yaml，或在控制台 New → Blueprint
+# 免费 Web Service（Docker + SQLite）；密钥类变量标 sync:false，首次部署时在控制台填写
+services:
+  - type: web
+    name: mfg-ai-base-backend
+    runtime: docker
+    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: false
+    envVars:
+      - key: APP_ENV
+        value: prod                 # 开启安全校验（SECRET_KEY/CORS 禁 *）
+      - key: DEMO_MODE
+        value: "true"               # 样例数据 + 演示横幅；访客三重限制两种模式都生效
+      - key: DB_DRIVER
+        value: sqlite               # 免外部数据库；注意免费实例磁盘为临时盘，重新部署会重置
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "20"
+      - key: LLM_BASE_URL
+        value: https://api.deepseek.com/v1
+      - key: LLM_MODEL
+        value: deepseek-chat
+      - key: SECRET_KEY
+        generateValue: true         # Render 首次部署生成强随机值并持久化
+      - key: LLM_API_KEY
+        sync: false                 # 控制台填写（只存后端，永不下发前端）
+      - key: CORS_ORIGINS
+        sync: false                 # 前端部署后填 Pages 地址，如 https://mfg-ai-base.edgeone.app

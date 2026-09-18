@@ -80,7 +80,7 @@ def issue_token(
     h = _b64url_encode(json.dumps(header, separators=(",", ":")).encode())
     p = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
     signing_input = f"{h}.{p}".encode()
-    sig = hmac.new(settings.SECRET_KEY.encode(), signing_input, hashlib.sha256).digest()
+    sig = hmac.new(settings.jwt_secret.encode(), signing_input, hashlib.sha256).digest()
     return f"{h}.{p}.{_b64url_encode(sig)}"
 
 
@@ -89,7 +89,7 @@ def decode_token(token: str) -> Optional[Dict[str, Any]]:
     try:
         h, p, s = token.split(".")
         signing_input = f"{h}.{p}".encode()
-        expect = hmac.new(settings.SECRET_KEY.encode(), signing_input, hashlib.sha256).digest()
+        expect = hmac.new(settings.jwt_secret.encode(), signing_input, hashlib.sha256).digest()
         if not hmac.compare_digest(expect, _b64url_decode(s)):
             return None
         payload = json.loads(_b64url_decode(p))
@@ -109,23 +109,21 @@ ANONYMOUS = {"id": 0, "username": "anonymous", "role": "viewer"}
 def current_user(request) -> Dict[str, Any]:  # type: ignore[no-untyped-def]
     """从 Authorization: Bearer 解析身份。
 
-    DEMO 模式（§5.3）：关闭鉴权，返回匿名 viewer。
-    PROD 模式：token 无效返回匿名（是否拒绝由中间件按路径白名单决定），
-    这样依赖注入处不需要抛异常，路由内可拿到 user 做细粒度判断。
+    两种模式均优先解析有效 Bearer JWT（DEMO 下管理员登录后可正确归因审计）；
+    guest 令牌（role=guest）不是用户身份，一律视为匿名（访客由 core.guest 单独校验）。
+    解析失败：DEMO 模式返回匿名 viewer；PROD 模式同样返回匿名
+    （是否拒绝由中间件按路径白名单决定）。
     """
-    if settings.DEMO_MODE:
-        return dict(ANONYMOUS)
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return dict(ANONYMOUS)
-    payload = decode_token(auth[7:].strip())
-    if not payload:
-        return dict(ANONYMOUS)
-    return {
-        "id": int(payload.get("uid", 0)),
-        "username": str(payload.get("username", "")),
-        "role": str(payload.get("role", "viewer")),
-    }
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        payload = decode_token(auth_header[7:].strip())
+        if payload and payload.get("role") != "guest":
+            return {
+                "id": int(payload.get("uid", 0)),
+                "username": str(payload.get("username", "")),
+                "role": str(payload.get("role", "viewer")),
+            }
+    return dict(ANONYMOUS)
 
 
 def is_authenticated(user: Dict[str, Any]) -> bool:

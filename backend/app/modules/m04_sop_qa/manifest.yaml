@@ -56,15 +56,6 @@ output_schema:
           clause: { type: string, title: 条款号 }
           status: { type: string, title: 版本状态 }
           note: { type: string, title: 备注 }
-    related:
-      type: array
-      title: 相关条款
-      items:
-        type: object
-        properties:
-          doc: { type: string }
-          version: { type: string }
-          clause: { type: string }
 
 # 能力声明
 capabilities:

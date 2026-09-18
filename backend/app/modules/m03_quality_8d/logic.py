@@ -15,6 +15,7 @@ SSE：meta → citation* → chunk*（流式 JSON 文本）→ result（结构�
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import re
@@ -30,7 +31,7 @@ from fastapi.responses import StreamingResponse
 from app.adapters.factory import get_file_store
 from app.api.files import register_generated_file
 from app.config import settings
-from app.core import audit
+from app.core import audit, demo_script
 from app.core.llm_gateway import get_gateway
 from app.core.rag.reranker import rerank
 from app.core.rag.retriever import get_service
@@ -59,6 +60,49 @@ DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.docu
 
 _CASE_ID_RE = re.compile(r"QC-\d{4}-\d{4}")
 
+# 头部字段兜底抽取（表单未填时，从异常描述/指标文本中正则提取）
+_BATCH_RE = re.compile(r"\b([A-Z]{2,}-[A-Z0-9]+(?:-[A-Z0-9]+)*)")
+_RATE_RES = (
+    re.compile(r"(?:不良率|缺陷率|不合格率)[：:\s]*([0-9]+(?:\.[0-9]+)?%?)"),
+    re.compile(r"([0-9]+(?:\.[0-9]+)?%)(?:\s*的?不良|\s*缺陷|\s*不合格)"),
+)
+_LINE_RE = re.compile(r"(\d+\s*号?线|[A-Za-z]\s*线|[一二三四五六七八九十]+\s*号?线|[\u4e00-\u9fa5A-Za-z0-9]{1,8}?车间)")
+# markdown 表格残留（模型偶尔把 | --- | 分隔行塞进因素文本）
+_MD_SEP_RE = re.compile(r"^[\s|:：\-—.]+$")
+
+
+def extract_header_fields(inputs: dict) -> Dict[str, str]:
+    """表单字段优先；缺失时从 defect_desc/metrics 文本抽取批次号、产线、不良率。
+
+    抽不到返回空串（导出时统一显示「—」，禁止出现"未提供"）。
+    """
+    desc = str(inputs.get("defect_desc") or "")
+    metrics_text = str(inputs.get("metrics") or "")
+    text = f"{desc} {metrics_text}"
+
+    batch = str(inputs.get("batch_no") or "").strip()
+    if not batch:
+        m = _BATCH_RE.search(text)
+        if m:
+            batch = m.group(1)
+
+    line = str(inputs.get("line") or "").strip()
+    if not line:
+        m = _LINE_RE.search(text)
+        if m:
+            line = re.sub(r"\s+", "", m.group(1))
+
+    rate = metrics_text.strip()
+    if not rate:
+        for rx in _RATE_RES:
+            m = rx.search(text)
+            if m:
+                v = m.group(1)
+                rate = f"不良率 {v}" if not v.endswith("%") else f"不良率 {v}"
+                break
+
+    return {"batch_no": batch, "line": line, "metrics": rate}
+
 
 # ===== 资源加载 =====
 
@@ -70,14 +114,7 @@ def _load_prompt(name: str) -> str:
     return (MODULE_DIR / "prompts" / name).read_text(encoding="utf-8")
 
 
-def _load_demo_scripts() -> list:
-    p = MODULE_DIR / "seed" / "demo_scripts.json"
-    if not p.exists():
-        return []
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return []
+# 剧本加载/匹配统一走平台级 core/demo_script（§2.2）
 
 
 # ===== 检索与引用 =====
@@ -161,11 +198,37 @@ def extract_json(text: str) -> Optional[dict]:
             return None
 
 
+def _unescape_deep(obj: Any) -> Any:
+    """递归反转义 LLM 文本中的 HTML 实体（结构化出口统一处理，界面/导出双干净）。"""
+    if isinstance(obj, str):
+        return html.unescape(obj)
+    if isinstance(obj, dict):
+        return {k: _unescape_deep(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_unescape_deep(v) for v in obj]
+    return obj
+
+
+def _clean_factor_text(raw: Any) -> str:
+    """清洗因素文本：去 markdown 表格竖线/分隔行，折叠空白。"""
+    s = str(raw or "").replace("|", " ")
+    s = re.sub(r"-{3,}", "—", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    # 纯分隔符行（---、|:--: 等）或清洗后为空 → 丢弃
+    if not s or _MD_SEP_RE.match(s):
+        return ""
+    return s
+
+
 def _norm_factor(item: Any) -> Optional[Dict[str, Any]]:
     if isinstance(item, str):
-        return {"factor": item, "is_primary": False}
+        factor = _clean_factor_text(item)
+        return {"factor": factor, "is_primary": False} if factor else None
     if isinstance(item, dict) and item.get("factor"):
-        return {"factor": str(item["factor"]), "is_primary": bool(item.get("is_primary", False))}
+        factor = _clean_factor_text(item["factor"])
+        if not factor:
+            return None
+        return {"factor": factor, "is_primary": bool(item.get("is_primary", False))}
     return None
 
 
@@ -193,7 +256,7 @@ def normalize_structured(parsed: Optional[dict], valid_case_ids: set) -> dict:
                 "answer": str(item.get("answer", "")),
             })
 
-    # 鱼骨图：固定六维度
+    # 鱼骨图：固定六维度，每类固定 3 行（共 18 行，不足补空占位，超出取前 3）
     raw_fb = parsed.get("fishbone") if isinstance(parsed.get("fishbone"), dict) else {}
     fishbone: Dict[str, List[Dict[str, Any]]] = {}
     for cat in FISHBONE_CATEGORIES:
@@ -202,6 +265,10 @@ def normalize_structured(parsed: Optional[dict], valid_case_ids: set) -> dict:
             f = _norm_factor(it)
             if f:
                 factors.append(f)
+            if len(factors) >= 3:
+                break
+        while len(factors) < 3:
+            factors.append({"factor": "", "is_primary": False})
         fishbone[cat] = factors
 
     # 相似案例：编号必须在真实检索集合内（防编造）
@@ -227,14 +294,14 @@ def normalize_structured(parsed: Optional[dict], valid_case_ids: set) -> dict:
     raw_r = parsed.get("report_8d") if isinstance(parsed.get("report_8d"), dict) else {}
     report_8d = {k: str(raw_r.get(k, "") or "") for k, _ in D8_KEYS}
 
-    return {
+    return _unescape_deep({
         "problem_summary": str(parsed.get("problem_summary", "") or ""),
         "five_why": five_why,
         "fishbone": fishbone,
         "similar_cases": similar,
         "report_8d": report_8d,
         "note": "",
-    }
+    })
 
 
 # ===== 降级：无 LLM 时基于检索片段构造非编造结构 =====
@@ -286,14 +353,25 @@ def _split_actions(text: str) -> List[str]:
 def build_doc_data(inputs: dict, structured: dict, report_no: str) -> dict:
     """把结构化结果转为 core/template 的通用文档模型。"""
     r = structured.get("report_8d", {})
+    # 头部字段：表单优先，缺失时从异常描述文本兜底抽取；仍无则显示「—」
+    header = extract_header_fields(inputs)
+    dash = lambda v: v if v else "—"  # noqa: E731
+
+    # 鱼骨图：六类 × 每类 3 行 = 固定 18 行（降级数据未经 normalize 时在此兜底补齐）
     fishbone_rows = []
     for cat in FISHBONE_CATEGORIES:
-        for f in structured.get("fishbone", {}).get(cat, []):
+        cat_factors = [
+            f for f in structured.get("fishbone", {}).get(cat, [])
+            if _clean_factor_text(f.get("factor", ""))
+        ][:3]
+        for f in cat_factors:
             fishbone_rows.append([
                 cat,
-                f.get("factor", ""),
+                _clean_factor_text(f.get("factor", "")),
                 "★ 主因" if f.get("is_primary") else "",
             ])
+        for _ in range(3 - len(cat_factors)):
+            fishbone_rows.append([cat, "—", ""])
 
     five_why_rows = [
         [fw.get("level", i), fw.get("question", ""), fw.get("answer", "")]
@@ -324,10 +402,10 @@ def build_doc_data(inputs: dict, structured: dict, report_no: str) -> dict:
 
     meta = [
         ("报告编号", report_no),
-        ("批次号", inputs.get("batch_no") or "未提供"),
-        ("产线/车间", inputs.get("line") or "未提供"),
-        ("异常现象", inputs.get("defect_desc") or ""),
-        ("关键指标", inputs.get("metrics") or "未提供"),
+        ("批次号", dash(header["batch_no"])),
+        ("产线/车间", dash(header["line"])),
+        ("异常现象", inputs.get("defect_desc") or "—"),
+        ("关键指标", dash(header["metrics"])),
         ("报告日期", datetime.now().strftime("%Y-%m-%d")),
         ("编制说明", "AI 基于历史质量案例辅助生成，经质量工程师审核后签发"),
     ]
@@ -392,13 +470,6 @@ async def _stream_text(text: str, delay: float = 0.02) -> AsyncIterator[str]:
         await asyncio.sleep(delay)
 
 
-def _match_demo_script(defect_desc: str) -> Optional[dict]:
-    for s in _load_demo_scripts():
-        if any(kw in defect_desc for kw in s.get("keywords", [])):
-            return s
-    return None
-
-
 # ===== 主入口 =====
 
 async def handle(payload: dict, request: Request) -> StreamingResponse:
@@ -432,6 +503,30 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                 yield sse_event("done", {"latency_ms": audit.now_ms() - start_ms, "tokens": {"in": 0, "out": 0}})
                 return
 
+            # ===== ⓪ 剧本模式（§2.2）：DEMO 无 Key 时仅放行推荐问题 =====
+            script_mode = demo_script.is_active_for_request(request)
+            matched = demo_script.match(MODULE_CODE, defect_desc) if script_mode else None
+            if script_mode and not matched:
+                msg = demo_script.not_matched_message(MODULE_CODE)
+                async for piece in demo_script.simulated_chunks(msg, chunk_size=12):
+                    yield sse_event("chunk", {"text": piece})
+                structured = {
+                    "problem_summary": defect_desc,
+                    "five_why": [],
+                    "fishbone": {c: [] for c in FISHBONE_CATEGORIES},
+                    "similar_cases": [],
+                    "report_8d": {k: "" for k, _ in D8_KEYS},
+                    "export_url": "",
+                    "note": msg,
+                }
+                yield sse_event("result", {"structured": structured})
+                latency = audit.now_ms() - start_ms
+                yield sse_event("done", {"latency_ms": latency, "tokens": {"in": 0, "out": 0}})
+                audit.audit_log(module_code=MODULE_CODE, action="invoke",
+                                question=defect_desc, answer=msg,
+                                latency_ms=latency, status="degraded", trace_id=trace_id)
+                return
+
             # ===== ① 检索相似历史案例 =====
             query = build_query(batch_no, line, defect_desc, metrics)
             service = get_service()
@@ -440,8 +535,8 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
             top_score = float(reranked[0].get("score", 0)) if reranked else 0.0
             logger.info("[M03] hits=%d reranked=%d top_score=%.3f", len(hits), len(reranked), top_score)
 
-            # ===== ② P6：无相似案例 → 明确提示，不生成报告 =====
-            if not reranked or top_score < MIN_SCORE:
+            # ===== ② P6：无相似案例 → 明确提示，不生成报告（剧本模式命中时放行）=====
+            if (not reranked or top_score < MIN_SCORE) and not (script_mode and matched):
                 msg = ("历史质量案例库中未检索到与该异常足够相似的案例，"
                        "为避免凭空生成误导性结论，暂不自动生成 8D 报告。"
                        "请补充缺陷现象关键词，或由质量工程师人工立案分析。")
@@ -495,24 +590,25 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                     logger.warning("[M03] LLM failed, fallback: %s", e)
                     llm_used = False
 
-            # ===== ⑤ 解析 / 降级 =====
+            # ===== ⑤ 解析 / 降级（剧本统一走平台匹配器 core/demo_script）=====
             if llm_used:
                 structured = normalize_structured(extract_json(answer_text), valid_case_ids)
                 # 解析彻底失败时降级，保证仍能导出报告
                 if not structured["five_why"] and not structured["report_8d"].get("d4_root_cause"):
-                    scripted = _match_demo_script(defect_desc)
+                    scripted = demo_script.match(MODULE_CODE, defect_desc)
                     if scripted:
                         structured = normalize_structured(scripted["structured"], valid_case_ids)
                         structured["note"] = "LLM 输出解析失败，已使用预置剧本降级生成。"
                     else:
                         structured = fallback_structured(clean_inputs, reranked)
             else:
-                scripted = _match_demo_script(defect_desc)
+                scripted = matched if script_mode else demo_script.match(MODULE_CODE, defect_desc)
                 if scripted:
                     answer_text = json.dumps(scripted["structured"], ensure_ascii=False)
                     if stream:
-                        async for piece in _stream_text(answer_text):
-                            yield piece
+                        # §2.2 剧本模拟流式：50–120ms 随机间隔
+                        async for piece in demo_script.simulated_chunks(answer_text, chunk_size=24):
+                            yield sse_event("chunk", {"text": piece})
                     else:
                         yield sse_event("chunk", {"text": answer_text})
                     structured = normalize_structured(scripted["structured"], valid_case_ids)

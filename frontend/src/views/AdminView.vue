@@ -23,12 +23,12 @@
           <div class="stat"><strong class="ok">{{ stats.success }}</strong><span>成功</span></div>
           <div class="stat"><strong class="warn">{{ stats.degraded }}</strong><span>降级</span></div>
           <div class="stat"><strong class="bad">{{ stats.failed }}</strong><span>失败</span></div>
-          <div class="stat"><strong>{{ stats.avg_latency_ms }}</strong><span>平均延迟 ms</span></div>
+          <div class="stat"><strong>{{ stats.avg_latency_ms }}</strong><span>平均响应耗时 ms</span></div>
         </div>
 
-        <!-- 近 7 日趋势 -->
-        <div v-if="stats && stats.trend_7d && stats.trend_7d.length" class="trend">
-          <div v-for="d in stats.trend_7d" :key="d.date" class="trend-col">
+        <!-- 近 14 日趋势 -->
+        <div v-if="stats && stats.trend_14d && stats.trend_14d.length" class="trend">
+          <div v-for="d in stats.trend_14d" :key="d.date" class="trend-col">
             <div class="trend-bar-wrap">
               <div class="trend-bar" :style="{ height: barHeight(d.count) + 'px' }" :title="`${d.date}: ${d.count}`"></div>
             </div>
@@ -43,6 +43,75 @@
             {{ m.module }} · {{ m.count }}
           </span>
         </div>
+
+        <!-- 访客时效链接（§2.1） -->
+        <h2>访客链接</h2>
+        <div class="guest-form">
+          <input v-model.trim="guestForm.note" type="text" placeholder="备注（给谁，如：XX公司-张总）" />
+          <select v-model.number="guestForm.hours">
+            <option :value="1">有效期 1 小时</option>
+            <option :value="6">有效期 6 小时</option>
+            <option :value="24">有效期 24 小时</option>
+          </select>
+          <input v-model.number="guestForm.maxCalls" type="number" min="1" max="100000" title="调用次数上限" />
+          <label class="chk">
+            <input v-model="guestForm.allowReal" type="checkbox" />
+            高级访客（真实 LLM）
+          </label>
+          <input
+            v-if="guestForm.allowReal"
+            v-model.number="guestForm.realMax"
+            type="number" min="1" max="10000"
+            title="真实 LLM 配额次数"
+          />
+          <button class="btn primary" :disabled="creating" @click="createGuestToken">
+            {{ creating ? '生成中…' : '生成访客链接' }}
+          </button>
+          <button class="btn" @click="loadGuestTokens">刷新列表</button>
+        </div>
+
+        <div v-if="guestLink" class="guest-link-box">
+          <div class="gl-label">请立即复制并发送（明文令牌仅显示一次）：</div>
+          <div class="gl-row">
+            <input class="mono" :value="guestLink" readonly @focus="$event.target.select()" />
+            <button class="btn primary" @click="copyLink">一键复制</button>
+          </div>
+        </div>
+
+        <div v-if="guestTokens.length" class="guest-table-wrap">
+          <table class="guest-table">
+            <thead>
+              <tr>
+                <th>备注</th><th>有效期至</th><th>已用/上限</th><th>剩余</th>
+                <th>真实LLM</th><th>状态</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="t in guestTokens" :key="t.jti">
+                <td>{{ t.note || '—' }}</td>
+                <td class="mono">{{ fmtExp(t.exp) }}</td>
+                <td class="mono">{{ t.used_calls }}/{{ t.max_calls }}</td>
+                <td class="mono">{{ t.remaining_calls }}</td>
+                <td>
+                  <span v-if="t.allow_real_llm" class="tag pro">
+                    高级 {{ t.real_llm_used }}/{{ t.real_llm_max }}
+                  </span>
+                  <span v-else class="dim">剧本模式</span>
+                </td>
+                <td><span class="tag g" :class="t.status">{{ guestStatusText(t.status) }}</span></td>
+                <td>
+                  <button
+                    v-if="t.status === 'active'"
+                    class="btn danger sm"
+                    @click="revokeToken(t.jti)"
+                  >吊销</button>
+                  <span v-else class="dim">—</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="empty">暂无访客链接</p>
 
         <!-- 筛选栏 -->
         <h2>审计日志</h2>
@@ -148,8 +217,8 @@ function fmtTime(t) {
 
 function barHeight(count) {
   const s = stats.value
-  if (!s || !s.trend_7d) return 4
-  const max = Math.max(...s.trend_7d.map((d) => d.count), 1)
+  if (!s || !s.trend_14d) return 4
+  const max = Math.max(...s.trend_14d.map((d) => d.count), 1)
   return 8 + Math.round((count / max) * 56)
 }
 
@@ -165,6 +234,72 @@ function applyFilters() {
 function page(dir) {
   filters.offset += dir * filters.limit
   loadLogs()
+}
+
+// ===== 访客链接管理（§2.1） =====
+const guestForm = reactive({ note: '', hours: 1, maxCalls: 30, allowReal: false, realMax: 10 })
+const guestLink = ref('')
+const guestTokens = ref([])
+const creating = ref(false)
+
+function fmtExp(exp) {
+  if (!exp) return '—'
+  const d = new Date(exp * 1000)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function guestStatusText(s) {
+  return { active: '有效', expired: '已过期', revoked: '已吊销', quota: '已用完' }[s] || s
+}
+
+async function loadGuestTokens() {
+  try {
+    const data = await api.adminGuestList()
+    guestTokens.value = data.items || []
+  } catch (e) {
+    console.error('guest tokens load failed', e)
+  }
+}
+
+async function createGuestToken() {
+  creating.value = true
+  guestLink.value = ''
+  try {
+    const t = await api.adminGuestCreate({
+      note: guestForm.note,
+      hours: guestForm.hours,
+      max_calls: guestForm.maxCalls,
+      allow_real_llm: guestForm.allowReal,
+      real_llm_max: guestForm.allowReal ? guestForm.realMax : 0,
+    })
+    guestLink.value = `${window.location.origin}/?t=${t.token}`
+    await loadGuestTokens()
+  } catch (e) {
+    alert(e.message || '生成失败')
+  } finally {
+    creating.value = false
+  }
+}
+
+async function copyLink() {
+  try {
+    await navigator.clipboard.writeText(guestLink.value)
+  } catch {
+    // http 环境降级：选中文本 + execCommand
+    const inp = document.querySelector('.guest-link-box input')
+    if (inp) { inp.select(); document.execCommand('copy') }
+  }
+}
+
+async function revokeToken(jti) {
+  if (!confirm('确认吊销该访客链接？吊销后立即失效。')) return
+  try {
+    await api.adminGuestRevoke(jti)
+    await loadGuestTokens()
+  } catch (e) {
+    alert(e.message || '吊销失败')
+  }
 }
 
 async function loadLogs() {
@@ -191,13 +326,11 @@ onMounted(async () => {
     sessionStorage.setItem('mfg_demo_mode', String(demoMode.value))
   } catch (e) { /* ignore */ }
 
-  // 生产模式下校验身份；DEMO 直接放行
-  if (!demoMode.value) {
-    const me = await fetchMe()
-    if (!me || me.role !== 'admin') {
-      needLogin.value = true
-      return
-    }
+  // 管理接口两种模式均要求 admin 角色（§2.1 访客门禁同步收紧）
+  const me = await fetchMe()
+  if (!me || me.role !== 'admin') {
+    needLogin.value = true
+    return
   }
 
   try {
@@ -208,6 +341,7 @@ onMounted(async () => {
     console.error('stats load failed', e)
   }
   loadLogs()
+  loadGuestTokens()
 })
 </script>
 
@@ -243,12 +377,12 @@ h2 { font-size: 15px; margin: 18px 0 8px; }
 .warn { color: var(--accent-warn); }
 .bad { color: var(--accent-danger); }
 
-.trend { display: flex; align-items: flex-end; gap: 14px; margin-top: 14px; padding: 10px; background: var(--bg-elevated); border-radius: 8px; }
-.trend-col { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.trend { display: flex; align-items: flex-end; gap: 8px; margin-top: 14px; padding: 10px; background: var(--bg-elevated); border-radius: 8px; overflow-x: auto; }
+.trend-col { display: flex; flex-direction: column; align-items: center; gap: 3px; flex: none; }
 .trend-bar-wrap { height: 64px; display: flex; align-items: flex-end; }
-.trend-bar { width: 26px; background: var(--accent); border-radius: 3px 3px 0 0; opacity: 0.85; }
-.trend-count { font-size: 12px; color: var(--text-primary); }
-.trend-date { font-size: 11px; color: var(--text-secondary); }
+.trend-bar { width: 18px; background: var(--accent); border-radius: 3px 3px 0 0; opacity: 0.85; }
+.trend-count { font-size: 11px; color: var(--text-primary); }
+.trend-date { font-size: 10px; color: var(--text-secondary); }
 
 .by-module { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .pill { font-size: 12px; padding: 2px 10px; border-radius: 12px; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-secondary); }
@@ -302,4 +436,55 @@ h2 { font-size: 15px; margin: 18px 0 8px; }
 .pager { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
 .pager-info { font-size: 12.5px; color: var(--text-secondary); }
 .mono { font-family: var(--font-mono); }
+
+/* ===== 访客链接（§2.1） ===== */
+.guest-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.guest-form input, .guest-form select {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.guest-form input[type="text"] { flex: 1; min-width: 200px; }
+.guest-form input[type="number"] { width: 90px; }
+.guest-form .chk { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #0F1720; }
+.btn.danger { color: var(--accent-danger); border-color: var(--accent-danger); background: transparent; }
+.btn.danger.sm { padding: 3px 10px; font-size: 12px; }
+.guest-link-box {
+  margin: 4px 0 14px;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+}
+.gl-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.gl-row { display: flex; gap: 8px; }
+.gl-row input {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.guest-table-wrap { overflow-x: auto; margin-bottom: 8px; }
+.guest-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.guest-table th, .guest-table td {
+  padding: 6px 10px;
+  border-bottom: 1px dashed var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+.guest-table th { color: var(--text-secondary); font-weight: 500; font-size: 12px; }
+.tag.g { padding: 1px 8px; border-radius: 4px; font-size: 11px; }
+.tag.g.active { background: var(--accent); color: #0F1720; }
+.tag.g.expired { background: var(--bg-elevated); color: var(--text-secondary); }
+.tag.g.revoked { background: var(--accent-danger); color: #fff; }
+.tag.g.quota { background: var(--accent-warn); color: #0F1720; }
+.tag.pro { padding: 1px 8px; border-radius: 4px; font-size: 11px; background: var(--accent-warn); color: #0F1720; }
+.dim { color: var(--text-secondary); font-size: 12px; }
 </style>

@@ -4,11 +4,18 @@
 """
 from __future__ import annotations
 
+import logging
+import secrets
 from functools import lru_cache
 from typing import List
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# 已知弱密钥占位值（历史版本默认值），生产环境一律拒绝
+_WEAK_SECRET_KEYS = {"", "please-change-me", "change-me", "secret", "changeme"}
 
 
 class Settings(BaseSettings):
@@ -24,7 +31,8 @@ class Settings(BaseSettings):
     # ===== 运行模式 =====
     DEMO_MODE: bool = True
     APP_ENV: str = "dev"  # dev | prod
-    SECRET_KEY: str = "please-change-me"
+    # 无默认值：生产模式必须通过环境变量注入强随机密钥（>=32 字符）
+    SECRET_KEY: str = ""
 
     # ===== 服务 =====
     BACKEND_HOST: str = "0.0.0.0"
@@ -68,6 +76,12 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 20
     NL2SQL_MAX_ROWS: int = 1000
 
+    # ===== 访客时效访问（§2.1）=====
+    GUEST_DEFAULT_HOURS: int = 1        # 链接默认有效期（可选 1/6/24）
+    GUEST_MAX_CALLS: int = 30           # 默认调用次数上限
+    GUEST_RATE_PER_MINUTE: int = 5      # 每 token 每分钟 invoke 频率上限
+    GUEST_REAL_LLM_MAX: int = 10        # 高级访客真实 LLM 配额默认值
+
     # ===== 路径（自动派生，不暴露给客户）=====
     BASE_DIR: str = "./"
     MODULES_DIR: str = "./app/modules"
@@ -83,7 +97,14 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> List[str]:
-        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        origins = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        # 生产环境禁止 * 通配（§2.3）：必须显式枚举前端来源
+        if self.is_prod and any(o == "*" for o in origins):
+            raise RuntimeError(
+                "CORS_ORIGINS 生产环境禁止使用 '*' 通配，"
+                "请显式配置前端来源（逗号分隔），如：https://xxx.pages.dev"
+            )
+        return origins
 
     @property
     def db_url(self) -> str:
@@ -102,6 +123,48 @@ class Settings(BaseSettings):
     def llm_ready(self) -> bool:
         """是否配置了真实 LLM Key。"""
         return bool(self.LLM_API_KEY and self.LLM_API_KEY.strip())
+
+    @property
+    def is_prod(self) -> bool:
+        """生产模式判定：显式 APP_ENV=prod 或 DEMO_MODE=false。"""
+        return self.APP_ENV.lower() == "prod" or not self.DEMO_MODE
+
+    def validate_security(self) -> None:
+        """启动期安全校验（fail-fast）：生产模式密钥缺失/弱密钥直接拒绝启动。"""
+        key = (self.SECRET_KEY or "").strip()
+        if self.is_prod:
+            if key in _WEAK_SECRET_KEYS:
+                raise RuntimeError(
+                    "SECRET_KEY 未配置或为弱占位值。生产模式必须通过环境变量注入强随机密钥"
+                    "（建议 >=32 字符，例如：python -c \"import secrets;print(secrets.token_hex(32))\"）。"
+                )
+            if len(key) < 16:
+                raise RuntimeError("SECRET_KEY 长度不足，生产模式要求至少 16 字符（建议 64 字符）。")
+
+    @property
+    def jwt_secret(self) -> str:
+        """JWT 签名密钥。
+
+        - 生产模式：必须显式配置，启动时 validate_security() 已校验
+        - DEMO 模式：未配置时进程级随机生成（重启后旧 token 全部失效，仅本地演示用）
+        """
+        key = (self.SECRET_KEY or "").strip()
+        if key and key not in _WEAK_SECRET_KEYS:
+            return key
+        if self.is_prod:
+            # 正常不会走到（启动已 fail-fast），双保险
+            raise RuntimeError("SECRET_KEY 未配置，无法签发 JWT。")
+        global _DEMO_FALLBACK_KEY
+        if not _DEMO_FALLBACK_KEY:
+            _DEMO_FALLBACK_KEY = secrets.token_hex(32)
+            logger.warning(
+                "SECRET_KEY 未配置：DEMO 模式使用进程级随机密钥（重启后登录态失效，仅供本地演示）"
+            )
+        return _DEMO_FALLBACK_KEY
+
+
+# DEMO 模式进程级回退密钥
+_DEMO_FALLBACK_KEY = ""
 
 
 @lru_cache

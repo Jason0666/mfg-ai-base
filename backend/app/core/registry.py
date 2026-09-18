@@ -77,6 +77,10 @@ class ModuleManifest(BaseModel):
     # 行业包标签：留空表示通用（所有行业包都加载）
     industry: str = ""
 
+    # 示例模块标记：true 表示硬编码模拟数据（非真实链路），前端展示角标/横幅且不进入演示动线
+    sample: bool = False
+    sample_notice: str = ""
+
     # 痛点与价值
     pain_points: List[str] = Field(default_factory=list)
     value_props: List[str] = Field(default_factory=list)

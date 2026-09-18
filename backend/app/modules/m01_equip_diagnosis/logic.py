@@ -17,6 +17,7 @@ SSE 事件序列：meta → chunk*（LLM 流式 JSON 文本）→ citation* → 
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import re
@@ -28,7 +29,7 @@ from fastapi import Request
 from fastapi.responses import StreamingResponse
 
 from app.config import settings
-from app.core import audit
+from app.core import audit, demo_script
 from app.core.llm_gateway import get_gateway
 from app.core.rag.retriever import get_service
 from app.core.rag.reranker import rerank
@@ -114,6 +115,62 @@ def build_citation(chunk: Dict[str, Any]) -> Dict[str, Any]:
         "source_type": "manual",
         "note": "",
     }
+
+
+def _cite_key(c: Dict[str, Any]) -> tuple:
+    """引用唯一键：工单按 wo_id，手册按 doc+page+clause。"""
+    return (c.get("wo_id") or c.get("doc") or "", c.get("page") or 0, c.get("clause") or "")
+
+
+def check_citation_diversity(
+    citations: List[Dict[str, Any]], structured: dict, trace_id: str
+) -> None:
+    """引用去重与多样性校验：命中异常只输出 warning，不阻断业务。
+
+    覆盖三类问题：
+    1. 检索引用列表自身重复（同条款多 chunk）
+    2. causes.source_refs 全部集中于同一来源
+    3. 双路检索（手册+工单）但实际只出现单一来源类型
+    """
+    keys = [_cite_key(c) for c in citations]
+    valid_keys = [k for k in keys if k[0]]
+    if len(valid_keys) != len(set(valid_keys)):
+        logger.warning(
+            "[M01] citation duplicate: total=%d unique=%d trace=%s",
+            len(valid_keys), len(set(valid_keys)), trace_id,
+        )
+
+    types_used = {c.get("source_type") for c in citations if c.get("source_type")}
+    if len(types_used) < 2:
+        logger.warning(
+            "[M01] single source type only: %s trace=%s", types_used, trace_id,
+        )
+
+    ref_sources: List[str] = []
+    for cause in structured.get("causes", []):
+        if not isinstance(cause, dict):
+            continue
+        for ref in cause.get("source_refs", []) or []:
+            if isinstance(ref, dict):
+                src = ref.get("wo_id") or ref.get("doc") or ""
+                if src:
+                    ref_sources.append(src)
+    if ref_sources:
+        counts: Dict[str, int] = {}
+        for s in ref_sources:
+            counts[s] = counts.get(s, 0) + 1
+        top_src, top_n = max(counts.items(), key=lambda kv: kv[1])
+        if len(counts) == 1 and len(ref_sources) >= 3:
+            logger.warning(
+                "[M01] citation concentration: %d refs all from %s trace=%s",
+                len(ref_sources), top_src, trace_id,
+            )
+        elif top_n >= 6:
+            # 单设备通常只有 1 本手册，多次引用属正常；仅当单一来源占 6 次以上才预警
+            logger.warning(
+                "[M01] citation skew: %s used %d/%d times trace=%s",
+                top_src, top_n, len(ref_sources), trace_id,
+            )
 
 
 # ===== Prompt 构造 =====
@@ -203,6 +260,17 @@ def _extract_json(text: str) -> Optional[dict]:
             return None
 
 
+def _unescape_deep(obj: Any) -> Any:
+    """递归反转义 LLM 文本中的 HTML 实体。"""
+    if isinstance(obj, str):
+        return html.unescape(obj)
+    if isinstance(obj, dict):
+        return {k: _unescape_deep(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_unescape_deep(v) for v in obj]
+    return obj
+
+
 def _normalize_structured(parsed: Optional[dict]) -> dict:
     """把解析出的 JSON 规范化为 output_schema 结构。"""
     if not parsed:
@@ -237,7 +305,7 @@ def _normalize_structured(parsed: Optional[dict]) -> dict:
             c = {"name": str(c), "probability": 0.0, "evidence": [], "source_refs": []}
     # 按 probability 降序
     out["causes"].sort(key=lambda x: -float(x.get("probability", 0.0)))
-    return out
+    return _unescape_deep(out)
 
 
 # ===== SSE 工具 =====
@@ -255,28 +323,43 @@ async def _stream_chunks(text: str, delay: float = 0.03) -> AsyncIterator[str]:
         await asyncio.sleep(delay)
 
 
-# ===== DEMO 剧本降级（仅在 LLM 不可用时使用）=====
+# ===== DEMO 剧本降级（平台级匹配器 core/demo_script，§2.2）=====
 
-def _load_demo_scripts() -> list[dict]:
-    p = MODULE_DIR / "seed" / "demo_scripts.json"
-    if not p.exists():
-        return []
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return []
-
-
-def _match_demo_script(symptom: str) -> Optional[dict]:
-    """按关键词匹配剧本（仅 LLM 不可用时降级使用）。"""
-    scripts = _load_demo_scripts()
-    if not scripts or not symptom:
-        return None
-    for s in scripts:
-        for kw in s.get("keywords", []):
-            if kw in symptom:
-                return s
-    return None
+def _citations_from_script(scripted: dict) -> List[Dict[str, Any]]:
+    """剧本模式下检索为空时，从剧本 source_refs 构造引用（去重）。"""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for cause in (scripted.get("structured") or {}).get("causes", []) or []:
+        if not isinstance(cause, dict):
+            continue
+        for ref in cause.get("source_refs", []) or []:
+            if not isinstance(ref, dict):
+                continue
+            wo = str(ref.get("wo_id", "") or "")
+            if wo:
+                cite = {
+                    "doc": "", "version": "", "effective_date": "",
+                    "page": 0, "clause": "", "wo_id": wo,
+                    "source_type": "work_order", "note": "",
+                }
+            elif ref.get("doc"):
+                cite = {
+                    "doc": str(ref["doc"]),
+                    "version": str(ref.get("version", "") or ""),
+                    "effective_date": "",
+                    "page": int(ref.get("page", 1) or 1),
+                    "clause": str(ref.get("clause", "") or ""),
+                    "wo_id": "",
+                    "source_type": "manual",
+                    "note": "",
+                }
+            else:
+                continue
+            key = _cite_key(cite)
+            if key[0] and key not in seen:
+                seen.add(key)
+                out.append(cite)
+    return out
 
 
 # ===== 主入口 =====
@@ -328,6 +411,23 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                 yield sse_event("done", {"latency_ms": audit.now_ms() - start_ms, "tokens": {"in": 0, "out": 0}})
                 return
 
+            # ===== ⓪ 剧本模式（§2.2）：DEMO 无 LLM Key 时仅放行推荐问题 =====
+            script_mode = demo_script.is_active_for_request(request)
+            matched = demo_script.match(MODULE_CODE, symptom) if script_mode else None
+            if script_mode and not matched:
+                msg = demo_script.not_matched_message(MODULE_CODE)
+                async for piece in demo_script.simulated_chunks(msg, chunk_size=12):
+                    yield sse_event("chunk", {"text": piece})
+                empty = {"causes": [], "steps": [], "spare_parts": [], "cases": [], "note": msg}
+                yield sse_event("result", {"structured": empty})
+                latency = audit.now_ms() - start_ms
+                yield sse_event("done", {"latency_ms": latency, "tokens": {"in": 0, "out": 0}})
+                audit.audit_log(
+                    module_code=MODULE_CODE, action="invoke", question=symptom,
+                    answer=msg, latency_ms=latency, status="degraded", trace_id=trace_id,
+                )
+                return
+
             # ===== ① query 改写 =====
             rewritten = rewrite_query(symptom, equipment_code)
             logger.info("[M01] symptom=%r equipment=%r rewritten=%r", symptom, equipment_code, rewritten)
@@ -346,35 +446,46 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
             reranked = rerank(rewritten, hits, top_n=RERANK_TOP_N)
             logger.info("[M01] reranked=%d", len(reranked))
 
-            # ===== ⑤ 检索为空 → P6 提示，不调 LLM =====
+            # ===== ⑤ 检索为空：剧本模式用剧本引用兜底；否则 P6 提示，不调 LLM =====
             if not reranked:
-                msg = "知识库中未找到相关内容，请补充设备手册或联系维修工程师。"
-                if stream:
-                    async for piece in _stream_chunks(msg):
-                        yield piece
+                if script_mode and matched:
+                    citations = _citations_from_script(matched)
+                    for cite in citations:
+                        yield sse_event("citation", cite)
                 else:
-                    yield sse_event("chunk", {"text": msg})
-                empty = {"causes": [], "steps": [], "spare_parts": [], "cases": [], "note": msg}
-                yield sse_event("result", {"structured": empty})
-                latency = audit.now_ms() - start_ms
-                yield sse_event("done", {"latency_ms": latency, "tokens": {"in": 0, "out": 0}})
-                audit.audit_log(
-                    module_code=MODULE_CODE,
-                    action="invoke",
-                    question=symptom,
-                    answer=msg,
-                    latency_ms=latency,
-                    status="success",
-                    trace_id=trace_id,
-                )
-                return
+                    msg = "知识库中未找到相关内容，请补充设备手册或联系维修工程师。"
+                    if stream:
+                        async for piece in _stream_chunks(msg):
+                            yield piece
+                    else:
+                        yield sse_event("chunk", {"text": msg})
+                    empty = {"causes": [], "steps": [], "spare_parts": [], "cases": [], "note": msg}
+                    yield sse_event("result", {"structured": empty})
+                    latency = audit.now_ms() - start_ms
+                    yield sse_event("done", {"latency_ms": latency, "tokens": {"in": 0, "out": 0}})
+                    audit.audit_log(
+                        module_code=MODULE_CODE,
+                        action="invoke",
+                        question=symptom,
+                        answer=msg,
+                        latency_ms=latency,
+                        status="success",
+                        trace_id=trace_id,
+                    )
+                    return
 
-            # ===== ⑥ 构造引用 =====
-            citations: List[Dict[str, Any]] = []
-            for c in reranked:
-                cite = build_citation(c)
-                citations.append(cite)
-                yield sse_event("citation", cite)
+            # ===== ⑥ 构造引用（同条款/同工单去重；检索为空时已由剧本引用兜底）=====
+            if reranked:
+                citations: List[Dict[str, Any]] = []
+                seen_cite_keys = set()
+                for c in reranked:
+                    cite = build_citation(c)
+                    key = _cite_key(cite)
+                    if key[0] and key in seen_cite_keys:
+                        continue
+                    seen_cite_keys.add(key)
+                    citations.append(cite)
+                    yield sse_event("citation", cite)
 
             # ===== ⑦ LLM 生成结构化 JSON（流式）=====
             messages = build_messages(
@@ -403,17 +514,18 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                     llm_used = False
 
             if not llm_used:
-                # 降级：匹配 demo 剧本；命中则流式输出剧本 JSON
-                scripted = _match_demo_script(symptom)
+                # 降级：剧本模式用门禁阶段已命中的剧本；LLM 异常（配了 Key）时现匹配一次
+                scripted = matched if script_mode else demo_script.match(MODULE_CODE, symptom)
                 if scripted:
                     answer_text = json.dumps(scripted.get("structured", {}), ensure_ascii=False)
                     if stream:
-                        async for piece in _stream_chunks(answer_text):
-                            yield piece
+                        # §2.2 剧本模拟流式：50–120ms 随机间隔
+                        async for piece in demo_script.simulated_chunks(answer_text, chunk_size=24):
+                            yield sse_event("chunk", {"text": piece})
                     else:
                         yield sse_event("chunk", {"text": answer_text})
                 else:
-                    # 兜底：把命中的 chunks 拼接为 JSON（保证 P6 不编造）
+                    # 兜底（仅 LLM 异常且无剧本时）：拼接命中的 chunks（保证 P6 不编造）
                     fallback = {
                         "causes": [],
                         "steps": [],
@@ -444,6 +556,9 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
             structured["citations"] = citations
             structured["query_rewritten"] = rewritten if rewritten != symptom else None
             structured["llm_used"] = llm_used
+
+            # 引用去重/多样性校验（只告警，不改变返回结果）
+            check_citation_diversity(citations, structured, trace_id)
 
             yield sse_event("result", {"structured": structured})
 

@@ -1,35 +1,46 @@
 <template>
   <div>
-    <div v-if="demoMode" class="demo-banner">
-      演示模式 · 数据为样例，非真实企业数据
-    </div>
-    <nav class="topnav">
-      <router-link to="/">模块市场</router-link>
-      <router-link to="/solution">落地路径</router-link>
-      <router-link to="/admin">管理</router-link>
-      <span class="spacer"></span>
-      <template v-if="user">
-        <span class="user-chip">
-          {{ user.display_name || user.username }}
-          <span class="role" :class="user.role">{{ roleLabel(user.role) }}</span>
-        </span>
-        <a href="#" @click.prevent="onLogout">退出</a>
-      </template>
-      <router-link v-else-if="!demoMode" to="/login">登录</router-link>
-    </nav>
-    <router-view />
+    <template v-if="isExpired">
+      <router-view />
+    </template>
+    <template v-else>
+      <div v-if="demoMode" class="demo-banner">
+        演示模式 · 数据为样例，非真实企业数据
+      </div>
+      <GuestBar v-if="isGuestMode" />
+      <nav class="topnav">
+        <router-link to="/">模块市场</router-link>
+        <router-link to="/solution">落地路径</router-link>
+        <router-link v-if="!isGuestMode" to="/admin">管理</router-link>
+        <span class="spacer"></span>
+        <template v-if="user">
+          <span class="user-chip">
+            {{ user.display_name || user.username }}
+            <span class="role" :class="user.role">{{ roleLabel(user.role) }}</span>
+          </span>
+          <a href="#" @click.prevent="onLogout">退出</a>
+        </template>
+        <router-link v-else-if="!demoMode && !isGuestMode" to="/login">登录</router-link>
+      </nav>
+      <router-view />
+    </template>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { api } from './api/client'
 import { auth, logout } from './store/auth'
+import { isGuest } from './store/guest'
+import GuestBar from './components/GuestBar.vue'
 
 const router = useRouter()
+const route = useRoute()
 const demoMode = ref(false)
 const user = computed(() => auth.user)
+const isGuestMode = computed(() => isGuest())
+const isExpired = computed(() => route.name === 'expired')
 
 function roleLabel(role) {
   return { admin: '管理员', analyst: '分析员', viewer: '查看' }[role] || role

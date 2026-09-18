@@ -132,7 +132,7 @@ demo:
   suggested_questions:
     - 检查这份招标文件的废标风险（使用内置模拟招标文件，内含5个埋点）
     - 我们的技术参数有哪些负偏离？请逐条对照
-  script_file: ""
+  script_file: seed/demo_scripts.json
 
 # 落地条件（前端 DeployCard 必须展示）
 deployment_requirements:

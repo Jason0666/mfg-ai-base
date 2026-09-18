@@ -123,6 +123,23 @@ _DDL_SQLITE = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_audit_module_time ON app_audit_log(module_code, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_audit_created ON app_audit_log(created_at)",
+    # 访客时效令牌（§2.1）：jti 持久化，支撑吊销/配额/过期四项校验
+    """
+    CREATE TABLE IF NOT EXISTS app_guest_token (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        jti            TEXT UNIQUE NOT NULL,
+        note           TEXT DEFAULT '',
+        exp            INTEGER NOT NULL,
+        max_calls      INTEGER NOT NULL DEFAULT 30,
+        used_calls     INTEGER NOT NULL DEFAULT 0,
+        allow_real_llm INTEGER NOT NULL DEFAULT 0,
+        real_llm_max   INTEGER NOT NULL DEFAULT 10,
+        real_llm_used  INTEGER NOT NULL DEFAULT 0,
+        revoked        INTEGER NOT NULL DEFAULT 0,
+        created_at     TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_guest_jti ON app_guest_token(jti)",
 ]
 
 _DDL_PG = [
@@ -177,11 +194,28 @@ _DDL_PG = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_audit_module_time ON app_audit_log(module_code, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_audit_created ON app_audit_log(created_at)",
+    # 访客时效令牌（§2.1）：与 sqlite 版同构
+    """
+    CREATE TABLE IF NOT EXISTS app_guest_token (
+        id             BIGSERIAL PRIMARY KEY,
+        jti            VARCHAR(64) UNIQUE NOT NULL,
+        note           VARCHAR(256) DEFAULT '',
+        exp            BIGINT NOT NULL,
+        max_calls      INTEGER NOT NULL DEFAULT 30,
+        used_calls     INTEGER NOT NULL DEFAULT 0,
+        allow_real_llm BOOLEAN NOT NULL DEFAULT FALSE,
+        real_llm_max   INTEGER NOT NULL DEFAULT 10,
+        real_llm_used  INTEGER NOT NULL DEFAULT 0,
+        revoked        BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at     TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_guest_jti ON app_guest_token(jti)",
 ]
 
 
 def ensure_platform_tables() -> None:
-    """幂等建平台四表。任何运行模式（DEMO/PROD）启动时都调用。"""
+    """幂等建平台表（含 app_guest_token）。任何运行模式（DEMO/PROD）启动时都调用。"""
     conn = get_conn()
     try:
         for sql in (_DDL_PG if settings.DB_DRIVER == "postgres" else _DDL_SQLITE):
@@ -195,7 +229,9 @@ def ensure_platform_tables() -> None:
 # ---------------------------------------------------------------------------
 # 种子用户
 # ---------------------------------------------------------------------------
-DEFAULT_USERS = [
+# 注意：下列固定口令仅用于本地 DEMO（DEMO_MODE=true，无鉴权）。
+# 生产模式首启会改为随机密码，只打印一次到后端启动日志，不写入代码/文档/前端。
+DEMO_USERS = [
     # (username, password, role, display_name)
     ("admin", "Admin@123", "admin", "系统管理员"),
     ("analyst", "Analyst@123", "analyst", "工艺分析师"),
@@ -203,8 +239,21 @@ DEFAULT_USERS = [
 ]
 
 
+def _gen_initial_password() -> str:
+    """生成 12 位初始密码（字母+数字，避免易混淆字符）。"""
+    import secrets
+    import string
+
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(12))
+
+
 def bootstrap_users() -> None:
-    """app_user 为空时种入三角色默认账号（首启打印警告提醒改密）。"""
+    """app_user 为空时种入三角色账号。
+
+    - DEMO 模式：使用固定开发口令（方便本地一键体验）
+    - 生产模式：随机初始密码，仅打印到后端日志一次，登录后必须改密
+    """
     from app.core.auth import hash_password  # 局部导入避免循环依赖
 
     conn = get_conn()
@@ -213,17 +262,106 @@ def bootstrap_users() -> None:
         count = cur.fetchone()["c"]
         if count:
             return
-        for username, password, role, display in DEFAULT_USERS:
+
+        is_prod = settings.is_prod
+        initials: List[tuple] = []
+        for username, demo_pwd, role, display in DEMO_USERS:
+            password = _gen_initial_password() if is_prod else demo_pwd
+            initials.append((username, password, role, display))
             conn.execute(
                 f"INSERT INTO app_user (username, display_name, password_hash, role, enabled) "
                 f"VALUES ({ph()}, {ph()}, {ph()}, {ph()}, 1)",
                 (username, display, hash_password(password), role),
             )
         conn.commit()
-        logger.warning(
-            "bootstrapped default users (admin/analyst/viewer) with default passwords — "
-            "PLEASE CHANGE THEM IMMEDIATELY via SQL: UPDATE app_user SET password_hash=..."
-        )
+
+        if is_prod:
+            lines = "\n".join(
+                f"    {u} / {p}  ({r})" for u, p, r, _ in initials
+            )
+            logger.warning(
+                "================ 初始账号（仅显示一次，请立即登录并改密）================\n%s\n"
+                "======================================================================",
+                lines,
+            )
+        else:
+            logger.info(
+                "bootstrapped DEMO users (admin/analyst/viewer) with local dev passwords"
+            )
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 审计日志种子（管理页 14 天趋势演示；仅 sqlite，按天幂等补齐滚动窗口）
+# ---------------------------------------------------------------------------
+_SEED_MODULES = [
+    "m04_sop_qa", "m01_equip_diagnosis", "m05_data_bi",
+    "m03_quality_8d", "m02_tender_audit",
+]
+_SEED_QUESTIONS = {
+    "m04_sop_qa": "注塑出现银纹应该怎么处理？",
+    "m01_equip_diagnosis": "CNC-07 主轴振动超标如何排查？",
+    "m05_data_bi": "9月11日良品率为什么下降？",
+    "m03_quality_8d": "注塑件气泡缺陷 8D 分析",
+    "m02_tender_audit": "招标文件资质条款审核",
+}
+_SEED_USERS = [1, 1, 2, 2, 3]  # admin/admin/analyst/analyst/viewer
+
+
+def seed_audit_logs(days: int = 14) -> None:
+    """为最近 days 天补齐演示审计数据（管理页趋势图有连续分布）。
+
+    - 仅 sqlite（生产 pg 由真实流量填充，避免时区歧义）
+    - 按天幂等：当天已有 seed 记录则跳过；重启自动补齐滚动窗口内缺失日期
+    - 时间戳为 UTC（与 CURRENT_TIMESTAMP 一致），工作时段 9:00-18:00
+    """
+    if settings.DB_DRIVER != "sqlite":
+        return
+    import datetime as dt
+    import random
+
+    conn = get_conn()
+    try:
+        inserted_total = 0
+        today = dt.datetime.now(dt.timezone.utc).date()
+        for d_back in range(days - 1, -1, -1):
+            day = today - dt.timedelta(days=d_back)
+            day_str = day.strftime("%Y-%m-%d")
+            cur = conn.execute(
+                f"SELECT COUNT(*) AS c FROM app_audit_log "
+                f"WHERE substr(created_at,1,10)={ph()} AND trace_id LIKE {ph()}",
+                (day_str, "seed-%"),
+            )
+            if cur.fetchone()["c"]:
+                continue
+            # 确定性伪随机：同一种子日数据稳定（幂等双保险）
+            rng = random.Random(day.toordinal())
+            n = rng.randint(3, 8)
+            for i in range(n):
+                module = rng.choice(_SEED_MODULES)
+                # 约 12% degraded、6% failed，其余 success
+                roll = rng.random()
+                status = "failed" if roll < 0.06 else ("degraded" if roll < 0.18 else "success")
+                latency = rng.randint(650, 4200)
+                hour = rng.randint(9, 17)
+                minute = rng.randint(0, 59)
+                ts = f"{day_str} {hour:02d}:{minute:02d}:{rng.randint(0, 59):02d}"
+                uid = rng.choice(_SEED_USERS)
+                q = _SEED_QUESTIONS[module]
+                answer = "（演示种子数据）" if status != "success" else "（演示种子数据）分析完成"
+                conn.execute(
+                    f"INSERT INTO app_audit_log "
+                    f"(user_id, module_code, action, question, answer, latency_ms, "
+                    f" status, trace_id, created_at) "
+                    f"VALUES ({ph()},{ph()},'invoke',{ph()},{ph()},{ph()},{ph()},{ph()},{ph()})",
+                    (uid, module, q, answer, latency, status,
+                     f"seed-{day_str}-{i}", ts),
+                )
+                inserted_total += 1
+        if inserted_total:
+            conn.commit()
+            logger.info("audit seed logs inserted: %d (window=%dd)", inserted_total, days)
     finally:
         conn.close()
 

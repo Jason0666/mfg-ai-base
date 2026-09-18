@@ -6,7 +6,7 @@
       <form @submit.prevent="onSubmit">
         <label>
           用户名
-          <input v-model.trim="username" type="text" autocomplete="username" placeholder="admin / analyst / viewer" />
+          <input v-model.trim="username" type="text" autocomplete="username" placeholder="请输入用户名" />
         </label>
         <label>
           密码
@@ -17,7 +17,7 @@
           {{ loading ? '登录中…' : '登 录' }}
         </button>
       </form>
-      <p class="hint">演示环境默认账号：admin / Admin@123</p>
+      <p class="hint">初始密码由部署方提供（生产首启时见后端启动日志）。</p>
       <router-link class="back" to="/">返回首页 →</router-link>
     </div>
   </div>

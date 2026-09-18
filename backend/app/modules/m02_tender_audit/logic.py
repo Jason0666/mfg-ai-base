@@ -28,7 +28,7 @@ from fastapi.responses import StreamingResponse
 from app.adapters.factory import get_file_store
 from app.api import files as files_api
 from app.config import settings
-from app.core import audit
+from app.core import audit, demo_script
 from app.core.document_parser import parse_document
 from app.core.llm_gateway import get_gateway
 from app.core.rag.reranker import rerank
@@ -439,6 +439,22 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
 
         filename = ""
         try:
+            # ===== ⓪ 剧本模式门禁（§2.2）：无 LLM Key 的演示模式只接受推荐问题 =====
+            # 内置样本审核（focus 留空）或命中剧本关键词 → 继续走确定性规则引擎；
+            # 输入了自由关注点但未命中任何剧本 → 明确提示，不静默处理。
+            if demo_script.is_active_for_request(request) and focus and not demo_script.match(MODULE_CODE, focus):
+                msg = demo_script.not_matched_message(MODULE_CODE)
+                async for piece in demo_script.simulated_chunks(msg, chunk_size=12):
+                    yield sse_event("chunk", {"text": piece})
+                yield sse_event("result", {"structured": _empty_structured(msg)})
+                yield sse_event("done", {"latency_ms": audit.now_ms() - start_ms,
+                                         "tokens": {"in": 0, "out": 0}})
+                audit.audit_log(module_code=MODULE_CODE, action="invoke",
+                                question=focus, answer=msg, citations=[],
+                                latency_ms=audit.now_ms() - start_ms,
+                                status="degraded", trace_id=trace_id)
+                return
+
             # ===== ① 取文件 + 解析 =====
             filename, content = get_file_bytes(file_id)
             pages = parse_document(filename, content)
@@ -536,8 +552,13 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                 summary = build_summary(risks, qual_rows, tech_rows)
                 if profile_note:
                     summary += f"（注：企业档案文本未能按 JSON 解析，本次比对使用内置档案；原文摘要：{profile_note[:80]}）"
-                async for piece in _stream_text(summary):
-                    yield piece
+                if demo_script.is_active_for_request(request):
+                    # §2.2 模拟流式：50–120ms 随机间隔
+                    async for piece in demo_script.simulated_chunks(summary, chunk_size=12):
+                        yield sse_event("chunk", {"text": piece})
+                else:
+                    async for piece in _stream_text(summary):
+                        yield piece
 
             structured = {
                 "audit_summary": summary,

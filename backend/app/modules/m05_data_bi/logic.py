@@ -32,7 +32,7 @@ from fastapi.responses import StreamingResponse
 
 from app.adapters.factory import get_relational_db
 from app.config import settings
-from app.core import audit
+from app.core import audit, demo_script
 from app.core.llm_gateway import get_gateway
 from app.core.nl2sql import describe_schema, ensure_limit, extract_sql, validate_sql
 
@@ -301,27 +301,7 @@ async def _stream_text(text: str, delay: float = 0.02) -> AsyncIterator[str]:
         await asyncio.sleep(delay)
 
 
-# ===== DEMO 剧本降级 =====
-
-def _load_demo_scripts() -> list[dict]:
-    p = MODULE_DIR / "seed" / "demo_scripts.json"
-    if not p.exists():
-        return []
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return []
-
-
-def _match_demo_script(question: str) -> Optional[dict]:
-    scripts = _load_demo_scripts()
-    if not scripts or not question:
-        return None
-    for s in scripts:
-        for kw in s.get("keywords", []):
-            if kw in question:
-                return s
-    return None
+# ===== DEMO 剧本降级（平台级匹配器 core/demo_script，§2.2）=====
 
 
 # ===== 主入口 =====
@@ -377,9 +357,9 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                     logger.warning("[M05] LLM sql generation failed: %s", e)
                     sql_error = str(e)
 
-            # 降级：LLM 不可用或两轮失败 → 预置 SQL（仍真实校验+执行）
+            # 降级：LLM 不可用或两轮失败 → 平台剧本预置 SQL（仍真实校验+执行）
             if not sql:
-                scripted = _match_demo_script(question)
+                scripted = demo_script.match(MODULE_CODE, question)
                 if scripted and scripted.get("sql"):
                     try:
                         validate_sql(scripted["sql"], TABLE_WHITELIST)
@@ -403,11 +383,23 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                     )
                     return
                 else:
-                    msg = "未能理解该问题，请换一种问法（如：上周各产线良率对比）。"
-                    async for piece in _stream_text(msg):
-                        yield piece
+                    # §2.2 剧本模式未命中 → 明确提示仅支持推荐问题
+                    msg = (
+                        demo_script.not_matched_message(MODULE_CODE)
+                        if demo_script.is_active_for_request(request)
+                        else "未能理解该问题，请换一种问法（如：上周各产线良率对比）。"
+                    )
+                    async for piece in demo_script.simulated_chunks(msg, chunk_size=12):
+                        yield sse_event("chunk", {"text": piece})
                     yield sse_event("result", {"structured": {"note": msg, "sql": ""}})
-                    yield sse_event("done", {"latency_ms": audit.now_ms() - start_ms, "tokens": {"in": 0, "out": 0}})
+                    latency = audit.now_ms() - start_ms
+                    yield sse_event("done", {"latency_ms": latency, "tokens": {"in": 0, "out": 0}})
+                    audit.audit_log(
+                        module_code=MODULE_CODE, action="invoke", question=question,
+                        answer=msg, latency_ms=latency,
+                        status="degraded" if demo_script.is_active_for_request(request) else "failed",
+                        trace_id=trace_id,
+                    )
                     return
 
             # ===== ③ 空结果 → P6 =====
@@ -452,7 +444,7 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
 
             # 降级解读：预置文本 + 预置图表意图（数据仍是真实查询结果）
             if not interpret_ok:
-                scripted = _match_demo_script(question)
+                scripted = demo_script.match(MODULE_CODE, question)
                 if scripted:
                     insight = scripted.get("insight", "")
                     attribution = scripted.get("attribution", [])
@@ -460,10 +452,14 @@ async def handle(payload: dict, request: Request) -> StreamingResponse:
                 if not insight:
                     insight = f"（模型不可用）查询已真实执行，返回 {len(rows)} 行数据，请查看下方表格。"
 
-            # ===== ⑤ 流式输出 insight 文本 =====
+            # ===== ⑤ 流式输出 insight 文本（剧本模式：50–120ms 模拟分片）=====
             if stream:
-                async for piece in _stream_text(insight):
-                    yield piece
+                if demo_script.is_active_for_request(request):
+                    async for piece in demo_script.simulated_chunks(insight, chunk_size=12):
+                        yield sse_event("chunk", {"text": piece})
+                else:
+                    async for piece in _stream_text(insight):
+                        yield piece
             else:
                 yield sse_event("chunk", {"text": insight})
 

@@ -21,7 +21,10 @@
             <div class="card-head">
               <span class="icon">{{ iconMap[m.icon] || '◆' }}</span>
               <div>
-                <div class="title">{{ m.name }}</div>
+                <div class="title">
+                  {{ m.name }}
+                  <span v-if="m.sample" class="sample-badge">示例数据</span>
+                </div>
                 <div class="code mono">{{ m.code }}</div>
               </div>
             </div>
@@ -85,7 +88,10 @@ const categories = computed(() => {
   return Object.keys(groups).map((name) => ({
     name,
     label: categoryLabels[name] || name,
-    items: groups[name].sort((a, b) => (a.order || 0) - (b.order || 0)),
+    // 示例模块排到分类末尾，演示动线不主动引导
+    items: groups[name].sort(
+      (a, b) => Number(!!a.sample) - Number(!!b.sample) || (a.order || 0) - (b.order || 0)
+    ),
   }))
 })
 
@@ -116,6 +122,18 @@ function open(code) {
 .card-head { display: flex; gap: 12px; align-items: center; }
 .icon { font-size: 24px; }
 .title { font-size: 16px; font-weight: 600; }
+.sample-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent-warn);
+  background: rgba(210, 150, 40, 0.12);
+  border: 1px solid rgba(210, 150, 40, 0.35);
+  border-radius: 10px;
+  vertical-align: middle;
+}
 .code { color: var(--text-secondary); font-size: 12px; }
 .summary { color: var(--text-secondary); font-size: 13px; margin: 8px 0; min-height: 2.4em; }
 .pain { font-size: 12px; color: var(--accent-warn); }

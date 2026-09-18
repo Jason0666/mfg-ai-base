@@ -228,11 +228,11 @@ def stats() -> Dict[str, Any]:
         )
         by_module = [{"module": r["module_code"], "count": r["c"]} for r in cur.fetchall()]
 
-        # 近 7 日每日计数（sqlite 用 substr，pg 用 ::text LIKE 前缀）
+        # 近 14 日每日计数（sqlite 用 substr，pg 用 ::text LIKE 前缀）
         trend: list[dict] = []
         import datetime as _dt
 
-        for i in range(6, -1, -1):
+        for i in range(13, -1, -1):
             day = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=i)).strftime("%Y-%m-%d")
             if settings.DB_DRIVER == "postgres":
                 sql = f"SELECT COUNT(*) AS c FROM app_audit_log WHERE created_at::text LIKE {ph()}"
@@ -249,7 +249,7 @@ def stats() -> Dict[str, Any]:
             "failed": row["failed"] or 0,
             "avg_latency_ms": int(row["avg_latency"] or 0),
             "by_module": by_module,
-            "trend_7d": trend,
+            "trend_14d": trend,
         }
     finally:
         conn.close()

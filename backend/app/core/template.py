@@ -22,6 +22,7 @@ PDF 用 PyMuPDF 内置中文字体 china-s（宋体形态），无需外部字�
 """
 from __future__ import annotations
 
+import html
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -33,6 +34,23 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
 logger = logging.getLogger(__name__)
+
+
+def _unescape_obj(obj: Any) -> Any:
+    """递归反转义 LLM 输出中的 HTML 实体（&gt; &lt; &amp; &nbsp; 等）。
+
+    LLM 偶尔把 markdown/比较符号转成实体写入 JSON，导出前统一还原，
+    保证 Word/PDF 中出现的是 >、<、& 等正常字符。
+    """
+    if isinstance(obj, str):
+        return html.unescape(obj)
+    if isinstance(obj, dict):
+        return {k: _unescape_obj(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_unescape_obj(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_unescape_obj(v) for v in obj)
+    return obj
 
 
 def _apply_cn_fonts(doc: Document) -> None:
@@ -128,6 +146,9 @@ def render_to_docx(template_path: str, data: dict, output_path: str) -> str:
             descriptor = yaml.safe_load(tp.read_text(encoding="utf-8")) or {}
         else:
             logger.warning("template descriptor not found: %s, render without descriptor", tp)
+
+    # 统一反转义 LLM 文本中的 HTML 实体
+    data = _unescape_obj(data)
 
     doc = Document()
     _apply_cn_fonts(doc)
@@ -389,6 +410,9 @@ def render_to_pdf(template_path: str, data: dict, output_path: str) -> str:
         tp = Path(template_path)
         if tp.exists():
             descriptor = yaml.safe_load(tp.read_text(encoding="utf-8")) or {}
+
+    # 统一反转义 LLM 文本中的 HTML 实体
+    data = _unescape_obj(data)
 
     pdf = _PdfDoc()
     try:
