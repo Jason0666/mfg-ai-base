@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.env
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Data
+backend/data/*.db
+backend/data/files/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
