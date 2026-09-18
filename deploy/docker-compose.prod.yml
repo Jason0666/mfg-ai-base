@@ -1,0 +1,23 @@
+# 生产覆写（§12.2）
+# 用法：docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# 改动点：DEMO_MODE=false、加 nginx 反代、暴露 80 端口
+
+services:
+  backend:
+    environment:
+      - DEMO_MODE=false
+      - APP_ENV=prod
+    restart: always
+
+  frontend:
+    # 生产用 nginx 静态托管替代 vite dev
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    command: ["nginx", "-g", "daemon off;"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: always

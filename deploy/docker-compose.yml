@@ -1,0 +1,74 @@
+# DEMO 模式一键启动（§12.1）
+# 使用：cd deploy && cp .env.example .env && docker compose up -d
+# 访问：http://localhost:5173
+
+name: mfg-ai-base
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${DB_USER:-mfgai}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-change-me}
+      POSTGRES_DB: ${DB_NAME:-mfgai}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-mfgai} -d ${DB_NAME:-mfgai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DEMO_MODE=${DEMO_MODE:-true}
+      - APP_ENV=${APP_ENV:-dev}
+      - DB_DRIVER=${DB_DRIVER:-postgres}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-mfgai}
+      - DB_USER=${DB_USER:-mfgai}
+      - DB_PASSWORD=${DB_PASSWORD:-change-me}
+      - VECTOR_DRIVER=${VECTOR_DRIVER:-pgvector}
+      - VECTOR_DIM=${VECTOR_DIM:-1024}
+      - FILE_ROOT=/app/data/files
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend:/app
+      - be_data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install --registry https://registry.npmmirror.com && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      - VITE_API_BASE=http://localhost:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../frontend:/app
+      - fe_node_modules:/app/node_modules
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  be_data:
+  fe_node_modules:

@@ -1,0 +1,74 @@
+# M06 · 能耗分析（DoD 验证模块）
+# 按模块开发规范创建，验证「不改主框架 30 分钟跑通」
+
+code: m06_energy_analysis
+name: 能耗异常分析
+version: "1.0.0"
+category: data
+industry: manufacturing
+order: 50
+icon: bolt
+summary: 输入产线和时间段，输出能耗异常时段诊断与节能建议。
+
+pain_points:
+  - 能耗异常靠人工巡检发现晚，异常时段已造成浪费
+  - 缺乏系统化归因，不知是设备问题还是排产问题
+value_props:
+  - 自动识别能耗异常时段并给出可能原因
+  - 按产线汇总节能建议，可追溯数据依据
+
+input_schema:
+  type: object
+  required: [question]
+  properties:
+    line:
+      type: string
+      title: 产线（选填）
+      widget: select
+      options: [A线, B线, C线, 全部]
+      default: "全部"
+    question:
+      type: string
+      title: 你的问题
+      widget: textarea
+      placeholder: 例如：A线最近一周有没有能耗异常？哪天偏高？
+
+output_schema:
+  type: object
+  properties:
+    summary:
+      type: string
+      title: 分析结论
+    anomalies:
+      type: array
+      title: 异常时段
+      items:
+        type: object
+        properties:
+          date: { type: string, title: 日期 }
+          line: { type: string, title: 产线 }
+          value: { type: number, title: 能耗值(kWh) }
+          reason: { type: string, title: 可能原因 }
+    suggestions:
+      type: array
+      title: 节能建议
+      items: { type: string }
+
+capabilities:
+  - structured_output
+
+demo:
+  suggested_questions:
+    - A线最近一周有没有能耗异常
+    - 哪条产线 9 月份能耗最高
+
+deployment_requirements:
+  data_needed:
+    - 近 30 天能耗明细（电/水/气，按小时）
+    - 产线班次表
+  integration: 对接 EMS 或导出 Excel
+  timeline: 数据齐备后 2 周上线
+  acceptance_criteria:
+    - 异常时段识别准确率 > 90%
+
+extra_endpoints: []

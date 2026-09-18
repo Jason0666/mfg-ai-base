@@ -1,0 +1,14 @@
+# 招标审核报告 Word 模板描述（客户可替换为公司审核报告模板，无需改代码）
+# core/template.py render_to_docx 读取本文件决定封面标题与章节顺序
+doc_title: 招标文件智能审核报告
+subtitle: 本报告由 AI 辅助生成，正式投标决策须由商务与技术负责人复核签字
+sections:
+  - {code: S1, title: 一、审核结论与行动建议}
+  - {code: S2, title: 二、废标风险清单}
+  - {code: S3, title: 三、资格要求逐项核查}
+  - {code: S4, title: 四、技术参数响应对照}
+  - {code: S5, title: 五、签字盖章与格式要求}
+  - {code: S6, title: 六、关键时间节点}
+footer_note: >-
+  制造业 AI 应用底座 · M02 招标文件智能审核模块生成；
+  页码基于招标文件电子版实际页定位；AI 结果须经人工复核。

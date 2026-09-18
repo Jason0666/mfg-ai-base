@@ -1,0 +1,82 @@
+/* §10.3 视觉规范（工业控制面板风格） */
+:root {
+  --bg-base:      #0F1720;
+  --bg-panel:     #16212E;
+  --bg-elevated:  #1E2C3C;
+  --border:       #2A3B4D;
+  --text-primary: #E6EDF3;
+  --text-secondary: #8B9BB0;
+  --accent:       #00D3A7;
+  --accent-warn:  #F5A623;
+  --accent-danger: #F0554B;
+  --font-ui:      "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-mono:    "JetBrains Mono", "Consolas", monospace;
+}
+
+* { box-sizing: border-box; }
+html, body, #app {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  min-height: 100vh;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-family: inherit;
+}
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.primary {
+  background: var(--accent);
+  color: #0F1720;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.mono { font-family: var(--font-mono); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.container { max-width: 1280px; margin: 0 auto; padding: 16px; }
+
+/* DEMO 模式横幅 */
+.demo-banner {
+  background: var(--accent-warn);
+  color: #0F1720;
+  text-align: center;
+  padding: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* 风险色块 */
+.tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+.tag.high { background: var(--accent-danger); color: #fff; }
+.tag.medium { background: var(--accent-warn); color: #0F1720; }
+.tag.low { background: var(--border); color: var(--text-primary); }
+
+/* 响应式 */
+@media (max-width: 1199px) { .grid { grid-template-columns: 1fr; } }
+@media (max-width: 768px) { .container { padding: 8px; } }

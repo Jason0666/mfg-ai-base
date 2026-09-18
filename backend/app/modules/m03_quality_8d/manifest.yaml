@@ -1,0 +1,192 @@
+# M03 · 质量异常分析与 8D 报告（§9.3）
+# 字段约束见 backend/app/core/registry.py ModuleManifest
+
+code: m03_quality_8d
+name: 质量异常分析与8D报告
+version: "1.0.0"
+category: document
+industry: manufacturing
+order: 40
+icon: doc
+summary: 输入质量异常描述，输出 5Why、鱼骨图、相似历史案例，并一键导出 D1–D8 完整 Word 报告。
+
+# 痛点与价值
+pain_points:
+  - 质量工程师编写 8D 报告耗时数小时至数天，重复劳动多
+  - 根因分析依赖个人经验，5Why 容易停在"员工操作失误"表层
+  - 历史质量案例散落各处，同类问题重复分析、重复试错
+value_props:
+  - 自动检索相似历史案例，根因与措施有据可依
+  - 5Why + 鱼骨图（人机料法环测）结构化产出，报告一键导出 Word
+  - 单份 8D 报告编制时间从 4 小时缩短至 30 分钟
+
+# 输入 schema（驱动前端 SchemaInput）
+input_schema:
+  type: object
+  required: [defect_desc]
+  properties:
+    batch_no:
+      type: string
+      title: 批次号（选填）
+      widget: text
+      placeholder: 例如：MB-260911-A
+    line:
+      type: string
+      title: 产线/车间（选填）
+      widget: select
+      options:
+        - A线
+        - B线
+        - C线
+        - D线
+        - 注塑车间
+        - 机加车间
+        - 喷涂车间
+        - 装配车间
+      default: ""
+    defect_desc:
+      type: string
+      title: 异常现象描述
+      widget: textarea
+      placeholder: 例如：A线注塑件表面出现密集气泡，主要集中在浇口附近，抽检不良率 8.2%
+    metrics:
+      type: string
+      title: 关键指标（选填）
+      widget: text
+      placeholder: 例如：不良率 8.2%，气泡缺陷占比 64%，涉及数量约 980 件
+
+# 输出 schema（驱动前端 SchemaOutput）
+output_schema:
+  type: object
+  properties:
+    problem_summary:
+      type: string
+      title: 问题概述
+    five_why:
+      type: array
+      title: 5Why 根因分析
+      items:
+        type: object
+        properties:
+          level: { type: integer, title: 层级 }
+          question: { type: string, title: 追问（为什么） }
+          answer: { type: string, title: 分析与答案 }
+    fishbone:
+      type: object
+      title: 鱼骨图分析（人机料法环测）
+      properties:
+        人:
+          type: array
+          title: 人（人员/操作）
+          items:
+            type: object
+            properties:
+              factor: { type: string, title: 潜在因素 }
+              is_primary: { type: boolean, title: 是否主因 }
+        机:
+          type: array
+          title: 机（设备/工装）
+          items:
+            type: object
+            properties:
+              factor: { type: string, title: 潜在因素 }
+              is_primary: { type: boolean, title: 是否主因 }
+        料:
+          type: array
+          title: 料（物料/批次）
+          items:
+            type: object
+            properties:
+              factor: { type: string, title: 潜在因素 }
+              is_primary: { type: boolean, title: 是否主因 }
+        法:
+          type: array
+          title: 法（工艺/方法）
+          items:
+            type: object
+            properties:
+              factor: { type: string, title: 潜在因素 }
+              is_primary: { type: boolean, title: 是否主因 }
+        环:
+          type: array
+          title: 环（环境）
+          items:
+            type: object
+            properties:
+              factor: { type: string, title: 潜在因素 }
+              is_primary: { type: boolean, title: 是否主因 }
+        测:
+          type: array
+          title: 测（测量/检验）
+          items:
+            type: object
+            properties:
+              factor: { type: string, title: 潜在因素 }
+              is_primary: { type: boolean, title: 是否主因 }
+    similar_cases:
+      type: array
+      title: 相似历史质量案例
+      items:
+        type: object
+        properties:
+          case_id: { type: string, title: 案例编号 }
+          title: { type: string, title: 案例名称 }
+          similarity: { type: string, title: 相似点 }
+          lesson: { type: string, title: 经验教训/可借鉴措施 }
+    report_8d:
+      type: object
+      title: 8D 报告内容（D1–D8）
+      properties:
+        d1_team: { type: string, title: D1 成立团队 }
+        d2_problem: { type: string, title: D2 描述问题 }
+        d3_containment: { type: string, title: D3 临时遏制措施 }
+        d4_root_cause: { type: string, title: D4 根本原因 }
+        d5_corrective: { type: string, title: D5 永久纠正措施 }
+        d6_verify: { type: string, title: D6 实施与效果验证 }
+        d7_prevent: { type: string, title: D7 预防再发生 }
+        d8_recognize: { type: string, title: D8 总结表彰 }
+    export_url:
+      type: string
+      title: 8D报告下载（Word）
+    export_url_pdf:
+      type: string
+      title: 8D报告下载（PDF）
+
+# 能力声明
+capabilities:
+  - rag
+  - citation
+  - structured_output
+  - template_export
+
+# 检索配置（历史质量案例库）
+retrieval:
+  collections: ["quality_case"]
+  top_k: 8
+  rerank_top_n: 6
+  filters: {}
+
+# 演示剧本（仅 LLM 不可用时降级，正常走真实 RAG + LLM 链路）
+demo:
+  suggested_questions:
+    - A线注塑件表面出现密集气泡，集中在浇口附近，批次 MB-260911-A，不良率 8.2%
+    - 机加车间零件内孔尺寸偏大 0.05mm，连续 3 批超差，设备 CNC-12
+    - 喷涂线涂层百格测试附着力不足，边角位置成片掉格
+  script_file: seed/demo_scripts.json
+
+# 落地条件（前端 DeployCard 必须展示）
+deployment_requirements:
+  data_needed:
+    - 历史质量案例/8D 报告（≥50 条更佳，覆盖主要缺陷类型，需含现象/根因/措施字段）
+    - 客户现行 8D 报告 Word 模板（替换 seed/template_8d.yaml 即可适配版式）
+    - 可选：近 90 天产线质量指标（不良率、批次、停机时长）
+  integration: 无需对接 MES/QMS，案例库支持 Excel/Word 批量导入；后续可对接 QMS 自动建单
+  timeline: 案例与模板齐备后 3 周上线
+  acceptance_criteria:
+    - 3 条推荐问题全部跑通真实链路（案例检索 → 5Why/鱼骨图 → 8D 生成 → Word 导出）
+    - 导出的 Word 可用 Office/WPS 正常打开，D1–D8 章节齐全、表格格式正常
+    - 相似案例必须来自真实检索结果（案例编号可溯源），不得编造
+    - 案例库无相关记录时明确提示，不强行生成报告
+  remarks: 5Why/鱼骨图为 AI 辅助分析结果，报告签发前须由质量工程师审核确认
+
+extra_endpoints: []

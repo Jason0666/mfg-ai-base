@@ -1,0 +1,16 @@
+# 8D 报告 Word 模板描述（P8：客户可替换为现行模板，无需改代码）
+# core/template.py render_to_docx 读取本文件决定封面标题与章节顺序
+doc_title: 8D 质量问题分析与解决报告
+subtitle: 本报告由 AI 基于历史质量案例辅助生成，经质量工程师审核后签发
+sections:
+  - {code: D1, title: D1 成立问题解决团队}
+  - {code: D2, title: D2 描述问题}
+  - {code: D3, title: D3 实施临时遏制措施}
+  - {code: D4, title: D4 确定并验证根本原因（5Why / 鱼骨图）}
+  - {code: D5, title: D5 制定并验证永久纠正措施}
+  - {code: D6, title: D6 实施永久措施并验证效果}
+  - {code: D7, title: D7 预防再发生}
+  - {code: D8, title: D8 总结与团队表彰}
+footer_note: >-
+  制造业 AI 应用底座 · M03 质量异常分析与 8D 报告模块生成；
+  报告中 AI 生成内容需经质量工程师审核确认。

@@ -1,0 +1,12 @@
+# 模块规则占位（§11，M2/M3 填充）
+# M02 标书审核的废标规则示例
+m02_tender_audit:
+  disqualify_patterns:
+    - id: R001
+      desc: 资格要求中要求财务报表但未提供
+      keywords: ["近三年", "审计财务报表"]
+      level: high
+    - id: R002
+      desc: 注册资本不足
+      keywords: ["注册资本"]
+      level: high

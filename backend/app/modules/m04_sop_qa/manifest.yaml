@@ -1,0 +1,106 @@
+# M04 · 工艺 SOP 智能问答（§9.4）
+# 字段约束见 backend/app/core/registry.py ModuleManifest
+
+code: m04_sop_qa
+name: 工艺 SOP 智能问答
+version: "1.0.0"
+category: knowledge
+industry: manufacturing
+order: 10                          # 首页排序靠前
+icon: book-open
+summary: 口语化提问，精准定位 SOP 条款；命中废止版本时主动提示现行版本。
+
+# 痛点与价值
+pain_points:
+  - SOP 文档沦为摆设，一线找不到条款
+  - 老师傅经验随人退休流失，新人上手慢
+  - 版本更新后旧条款被误用，造成批量不良
+value_props:
+  - 一句话定位到具体条款号与页码
+  - 自动识别废止版本并提示现行版本
+  - 不编造，知识库没有就明确说没有
+
+# 输入 schema（驱动前端 SchemaInput）
+input_schema:
+  type: object
+  required: [question]
+  properties:
+    question:
+      type: string
+      title: 你的问题
+      widget: textarea
+      placeholder: 例如：注塑出现银纹怎么处理？
+    line:
+      type: string
+      title: 产线（选填）
+      widget: select
+      options: ["A线", "B线", "C线", "通用"]
+
+# 输出 schema（驱动前端 SchemaOutput）
+output_schema:
+  type: object
+  properties:
+    answer:
+      type: string
+      title: 回答
+    citations:
+      type: array
+      title: 引用来源
+      items:
+        type: object
+        properties:
+          doc: { type: string, title: 文档名 }
+          version: { type: string, title: 版本 }
+          effective_date: { type: string, title: 生效日期 }
+          page: { type: integer, title: 页码 }
+          clause: { type: string, title: 条款号 }
+          status: { type: string, title: 版本状态 }
+          note: { type: string, title: 备注 }
+    related:
+      type: array
+      title: 相关条款
+      items:
+        type: object
+        properties:
+          doc: { type: string }
+          version: { type: string }
+          clause: { type: string }
+
+# 能力声明
+capabilities:
+  - rag
+  - citation
+  - multi_turn
+
+# 检索配置
+retrieval:
+  collections: ["m04_sop_qa"]
+  top_k: 8
+  rerank_top_n: 5
+  filters: { status: active }
+
+# 演示剧本（M2 DoD 要求走真实链路，剧本仅作为 LLM 不可用时的降级答案）
+demo:
+  suggested_questions:
+    - 注塑出现银纹应该怎么处理？
+    - SOP-PU-001 的开模温度是多少？
+    - 首件检验发现尺寸偏小应该按哪个流程处理？
+  script_file: seed/demo_scripts.json
+
+# 落地条件（前端 DeployCard 必须展示）
+deployment_requirements:
+  data_needed:
+    - 工艺 SOP 文档（Word/PDF/Markdown 均可）
+    - 至少包含版本号与生效日期字段
+    - 建议提供 V1.0/V3.2 等版本对照组以验证版本识别
+  integration: 无需对接外部系统，文件级导入即可；如有 MES/OA 可拉取最新版本
+  timeline: 数据齐备后 1 周上线
+  acceptance_criteria:
+    - 3 条推荐问题全部可跑通完整真实 RAG 链路
+    - 输出带引用（文档名+版本+生效日期+条款号+页码）
+    - 命中废止版本时提示「该条款已于 X 日废止，现行版本为 V3.2」
+    - 检索为空时明确提示「知识库中未找到相关内容」，不编造
+  remarks: M2 首个上线模块，验证 RAG 链路；术语表可在 backend/config/terminology.yaml 扩展
+
+# 可选：模块专属接口（M04 暂无）
+extra_endpoints: []

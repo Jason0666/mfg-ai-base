@@ -1,0 +1,155 @@
+# M02 · 招标文件智能审核（§9.2）
+# 字段约束见 backend/app/core/registry.py ModuleManifest
+
+code: m02_tender_audit
+name: 招标文件智能审核
+version: "1.0.0"
+category: document
+industry: manufacturing
+order: 20
+icon: doc
+summary: 上传招标文件 PDF/Word，自动定位废标风险、资格缺项、技术负偏离、盖章与时间节点，一键导出审核报告。
+
+# 痛点与价值
+pain_points:
+  - 几百页标书靠人工逐条比对，漏一条资格/盖章/时间要求即可能废标
+  - 技术参数散落在长表格中，数值、单位、方向比对容易出错
+  - 审核结论依赖个人经验，新人难发现"近三年审计财报""实缴口径"等隐性陷阱
+value_props:
+  - 条款按页解析定位，风险直接给条款号+页码，复核不用翻全文
+  - 资质与技术参数确定性规则比对（数值不让 AI 拍脑袋），正/负偏离清晰
+  - 单份标书初审从 1-2 个工作日缩短到 10 分钟，审核报告一键导出 Word
+
+# 输入 schema（驱动前端 SchemaInput）
+input_schema:
+  type: object
+  required: []
+  properties:
+    file_id:
+      type: string
+      title: 招标文件（PDF / Word）
+      widget: file_upload
+      accept: ".pdf,.docx,.doc"
+      placeholder: "上传招标文件，或点击下方按钮载入内置模拟招标文件"
+    our_profile:
+      type: string
+      title: 企业资质与技术参数（选填）
+      widget: textarea
+      rows: 4
+      placeholder: "留空则使用内置示例企业档案（注册资本1500万、ISO9001、处理能力480件/小时…）；可粘贴本企业档案 JSON 或文字描述"
+    focus:
+      type: string
+      title: 重点关注（选填）
+      widget: text
+      placeholder: "例如：重点检查废标风险与技术负偏离"
+
+# 输出 schema（驱动前端 SchemaOutput）
+output_schema:
+  type: object
+  properties:
+    audit_summary:
+      type: string
+      title: 审核结论与行动建议
+    disqualify_risks:
+      type: array
+      title: 废标风险清单（高风险优先）
+      items:
+        type: object
+        properties:
+          level: { type: string, title: 风险等级 }
+          clause: { type: string, title: 条款 }
+          page: { type: integer, title: 页码 }
+          reason: { type: string, title: 风险说明 }
+          our_status: { type: string, title: 我方情况 }
+          suggestion: { type: string, title: 处置建议 }
+    qualification_check:
+      type: array
+      title: 资格要求逐项核查
+      items:
+        type: object
+        properties:
+          requirement: { type: string, title: 招标要求 }
+          ours: { type: string, title: 我方情况 }
+          match: { type: boolean, title: 是否满足 }
+          page: { type: integer, title: 页码 }
+    tech_response:
+      type: array
+      title: 技术参数响应对照（含偏离标记）
+      items:
+        type: object
+        properties:
+          item: { type: string, title: 参数项 }
+          required: { type: string, title: 招标要求 }
+          ours: { type: string, title: 我方参数 }
+          deviation: { type: string, title: 偏离情况 }
+          material: { type: boolean, title: 是否实质性条款 }
+          page: { type: integer, title: 页码 }
+    seal_required:
+      type: array
+      title: 签字盖章 / 格式要求清单
+      items:
+        type: object
+        properties:
+          page: { type: integer, title: 页码 }
+          clause: { type: string, title: 条款 }
+          desc: { type: string, title: 要求说明 }
+    timeline:
+      type: array
+      title: 关键时间节点（按紧急度）
+      items:
+        type: object
+        properties:
+          event: { type: string, title: 事项 }
+          deadline: { type: string, title: 截止时间 }
+          days_left: { type: integer, title: 距今天数 }
+          level: { type: string, title: 紧急度 }
+          page: { type: integer, title: 页码 }
+    export_url:
+      type: string
+      title: 审核报告下载（Word）
+    export_url_pdf:
+      type: string
+      title: 审核报告下载（PDF）
+
+# 能力声明
+capabilities:
+  - file_parse
+  - rag
+  - citation
+  - rules
+  - structured_output
+  - template_export
+
+# 检索配置（废标审核要点库）
+retrieval:
+  collections: ["m02_tender_audit"]
+  top_k: 6
+  rerank_top_n: 4
+  filters: {}
+
+# 演示剧本（推荐问题；主链路为 解析+规则引擎+LLM，不做假数据短路）
+demo:
+  suggested_questions:
+    - 检查这份招标文件的废标风险（使用内置模拟招标文件，内含5个埋点）
+    - 我们的技术参数有哪些负偏离？请逐条对照
+  script_file: ""
+
+# 落地条件（前端 DeployCard 必须展示）
+deployment_requirements:
+  data_needed:
+    - 本企业资质档案（证照、注册资本、业绩、认证有效期）与产品技术参数台账，按 company_profile.json 模板填写
+    - 可选：历史投标文件、审核要点库与历史废标案例沉淀
+    - 招标文件电子版（PDF 为文本型最佳；扫描件需先 OCR，规划在 M3）
+  integration: 独立运行；后续可对接文档管理/合同系统自动取招标文件，对接 OA 推送用印与时间节点提醒
+  timeline: 企业档案模板填写完成后 2-3 周上线；历史审核要点库可持续沉淀
+  acceptance_criteria:
+    - 内置模拟招标文件的 5 个废标风险埋点全部命中，且页码定位与实际一致
+    - 资格缺项/不满足、技术参数正负偏离均由规则引擎依据数值判定，不凭空编造
+    - 上传真实 PDF/Word 可解析；非招标文件明确提示，不强行生成审核结论
+    - 导出的 Word 审核报告可正常打开，风险/资格/技术/盖章/时间五类表格齐全
+  remarks: AI 输出为投标辅助审核结果，正式投标决策须由商务与技术负责人复核签字
+
+extra_endpoints:
+  - path: /sample
+    method: GET
+    handler: sample_file

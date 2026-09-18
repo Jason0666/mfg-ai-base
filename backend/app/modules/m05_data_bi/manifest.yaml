@@ -1,0 +1,104 @@
+# M05 · 生产数据问答（§9.5）
+# 字段约束见 backend/app/core/registry.py ModuleManifest
+
+code: m05_data_bi
+name: 生产数据问答
+version: "1.0.0"
+category: data
+industry: manufacturing
+order: 30
+icon: chart-bar
+summary: 自然语言直接问数，自动生成只读 SQL、数据表格、趋势图与归因结论。
+
+# 痛点与价值
+pain_points:
+  - 想看数据要找 IT 拉报表，反馈周期长
+  - 报表字段看不懂，异常原因靠猜
+  - SQL 直连有数据安全风险
+value_props:
+  - 一句话出表、出图、出结论，无需等 IT
+  - 生成的 SQL 完全透明展示，可复核
+  - 仅允许 SELECT + 表白名单 + 自动 LIMIT，数据零写入风险
+
+# 输入 schema（驱动前端 SchemaInput）
+input_schema:
+  type: object
+  required: [question]
+  properties:
+    question:
+      type: string
+      title: 你的问题
+      widget: textarea
+      placeholder: 例如：上周A线和B线良率对比，A线下降的主要原因是什么？
+    time_range:
+      type: string
+      title: 时间范围（选填）
+      widget: select
+      options: ["近7天", "上周", "近30天", "全部"]
+      default: "全部"
+
+# 输出 schema（驱动前端 SchemaOutput）
+output_schema:
+  type: object
+  properties:
+    sql:
+      type: string
+      title: 生成的 SQL（只读，可复核）
+    table_data:
+      type: array
+      title: 查询结果
+      items:
+        type: object
+    chart_spec:
+      type: object
+      title: 图表
+    insight:
+      type: string
+      title: 结论解读
+    attribution:
+      type: array
+      title: 归因分解
+      items:
+        type: object
+        properties:
+          factor: { type: string, title: 归因因素 }
+          evidence: { type: string, title: 数据证据 }
+          impact: { type: string, title: 影响量化 }
+
+# 能力声明
+capabilities:
+  - nl2sql
+  - structured_output
+
+# M05 不走 RAG 检索，retrieval 留空
+retrieval:
+  collections: []
+  top_k: 0
+  rerank_top_n: 0
+  filters: {}
+
+# 演示剧本（真实链路：LLM 生成 SQL → 安全校验 → 执行 → LLM 归因；剧本仅作 LLM 不可用降级）
+demo:
+  suggested_questions:
+    - 上周A线和B线良率对比，A线下降的主要原因是什么？
+    - 近30天各产线良率趋势如何？
+    - 2026年9月11日各产线生产指标对比
+  script_file: seed/demo_scripts.json
+
+# 落地条件（前端 DeployCard 必须展示）
+deployment_requirements:
+  data_needed:
+    - 生产日报/MES 指标表（日期、产线、产量、合格数、不良数、良率即可）
+    - 可选：物料批次、停机时长等归因维度字段
+    - 至少 90 天历史数据以支持趋势分析
+  integration: 只读账号接入 PostgreSQL/MySQL（达梦/人大金仓信创预留）；不需要开放写权限
+  timeline: 数据视图就绪后 2 周上线
+  acceptance_criteria:
+    - 3 条推荐问题全部可跑通真实 NL2SQL 链路（生成 SQL → 校验 → 执行 → 归因）
+    - 生成 SQL 透明展示，仅 SELECT、表名命中白名单、自动补 LIMIT
+    - 人为植入的 9/11 A线换料批次异常可被准确定位与归因
+    - 任何非 SELECT 语句 / 非白名单表被拒绝，不执行
+  remarks: 上线时为数据库账号配置只读权限（GRANT SELECT），形成双保险；字段口径建议附数据字典以提升生成准确率
+
+# 可选：模块专属接口（M05 暂无）
+extra_endpoints: []

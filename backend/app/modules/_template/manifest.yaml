@@ -1,0 +1,87 @@
+# 模块 manifest 模板（§8.1 完整 schema）
+# 新模块流程：复制本目录 → 改 code/name → 实现 logic.py
+# 字段约束见 backend/app/core/registry.py ModuleManifest 模型
+
+code: _template
+name: 模板模块（占位）
+version: "0.1.0"
+category: knowledge                # document | knowledge | data
+order: 99                          # 首页排序，越大越靠后；占位放最后
+icon: cube
+summary: 复制此目录创建新模块的脚手架，本身只返回占位内容用于骨架联调。
+
+# 痛点与价值
+pain_points:
+  - （示例）某业务环节耗时过长
+  - （示例）经验无法沉淀复用
+value_props:
+  - （示例）一句话触发结构化输出
+  - （示例）每条结论可溯源
+
+# 输入 schema（驱动前端 SchemaInput 自动渲染）
+input_schema:
+  type: object
+  required: [question]
+  properties:
+    question:
+      type: string
+      title: 问题
+      widget: textarea
+      placeholder: 例如：如何……？
+    context:
+      type: object
+      title: 补充信息
+      properties:
+        recent_change: { type: string, title: 近期变更, widget: text }
+
+# 输出 schema（驱动前端 SchemaOutput 渲染）
+output_schema:
+  type: object
+  properties:
+    answer:
+      type: string
+      title: 回答
+    citations:
+      type: array
+      title: 引用来源
+      items:
+        type: object
+        properties:
+          doc: { type: string }
+          page: { type: integer }
+          clause: { type: string }
+
+# 能力声明
+capabilities:
+  - citation
+  - structured_output
+  # 其他：rag | rules | template_export | nl2sql | file_parse | multi_turn
+
+# 检索配置（声明 rag 能力时必填）
+retrieval:
+  collections: []
+  top_k: 8
+  rerank_top_n: 5
+  filters: { status: active }
+
+# 演示剧本
+demo:
+  suggested_questions:
+    - 这是一个模板占位问题，如何……？
+    - 模板可以演示空转调用链路吗？
+    - 这个模板在 M1 验收中扮演什么角色？
+  script_file: seed/demo_scripts.json
+
+# ★ 落地条件（前端 DeployCard 必须展示）
+deployment_requirements:
+  data_needed:
+    - （示例）相关业务文档或历史记录
+  integration: 无需对接外部系统，文件级导入即可
+  timeline: 数据齐备后 1 周上线
+  acceptance_criteria:
+    - 模板可被复制为真实模块
+    - 真实链路可跑通 3 条推荐问题
+  remarks: _template 仅用于骨架联调，正式交付时不会被启用
+
+# 可选：模块专属接口
+extra_endpoints: []

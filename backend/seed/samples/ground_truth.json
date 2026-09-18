@@ -1,0 +1,41 @@
+{
+  "pdf": "tender_sample.pdf",
+  "page_count": 66,
+  "risks": [
+    {
+      "id": "R1",
+      "kind": "qualification_missing",
+      "page": 19,
+      "anchor": "近三年（2023、2024、2025年度）经具有法定资质的会计师事务所审计的财务报告",
+      "expect": "近三年经审计财务报告未提供"
+    },
+    {
+      "id": "R2",
+      "kind": "qualification_mismatch",
+      "page": 18,
+      "anchor": "投标人实缴注册资本不低于人民币2000万元",
+      "expect": "注册资本2000万 vs 企业1500万"
+    },
+    {
+      "id": "R3",
+      "kind": "tech_negative",
+      "page": 29,
+      "anchor": "系统综合处理能力不低于500件/小时",
+      "expect": "处理能力≥500件/小时 vs 企业480"
+    },
+    {
+      "id": "R4",
+      "kind": "seal_required",
+      "page": 56,
+      "anchor": "本授权委托书须由法定代表人亲笔签署并加盖投标人单位公章",
+      "expect": "授权委托书须法人签字+公章"
+    },
+    {
+      "id": "R5",
+      "kind": "timeline",
+      "page": 5,
+      "anchor": "投标保证金须于2026年10月8日16:00前到达招标人指定账户",
+      "expect": "保证金到账截止2026-10-08 16:00"
+    }
+  ]
+}

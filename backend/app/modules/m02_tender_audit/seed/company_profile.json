@@ -1,0 +1,33 @@
+{
+  "company": "示例智能装备有限公司（投标主体档案）",
+  "updated": "2026-09-01",
+  "registered_capital_wan": 1500,
+  "established_year": 2014,
+  "employees": 186,
+  "qualifications": [
+    {"name": "ISO9001质量管理体系认证", "held": true, "evidence": "证书号 00122Q34567R0M，有效期至2027-06-30"},
+    {"name": "ISO14001环境管理体系认证", "held": true, "evidence": "证书号 00122E23456R0M，有效期至2027-03-15"},
+    {"name": "近三年经审计的财务报告", "held": false, "evidence": "", "note": "公司仅有内部年度报表，未做第三方审计"},
+    {"name": "高新技术企业证书", "held": true, "evidence": "GR2024示例号，有效期至2027年"},
+    {"name": "安全生产标准化二级证书", "held": true, "evidence": "有效期至2027-12-31"}
+  ],
+  "tech_params": [
+    {"item": "处理能力", "value": 480, "unit": "件/小时", "note": "标准工况实测节拍"},
+    {"item": "定位精度", "value": 0.03, "unit": "mm", "note": "全行程±0.03mm"},
+    {"item": "重复定位精度", "value": 0.02, "unit": "mm"},
+    {"item": "设备综合效率OEE", "value": 92, "unit": "%"},
+    {"item": "平均无故障工作时间MTBF", "value": 1200, "unit": "小时"},
+    {"item": "质保期", "value": 2, "unit": "年"},
+    {"item": "售后响应时间", "value": 24, "unit": "小时"}
+  ],
+  "similar_performance": {
+    "count_3y": 3,
+    "items": [
+      "华东某汽车零部件厂自动化产线项目（2025年）",
+      "华南某电子厂智能装配检测线（2024年）",
+      "西南某新能源企业包装码垛线（2024年）"
+    ]
+  },
+  "seals_available": ["公章", "合同专用章", "财务专用章", "法定代表人名章"],
+  "notes": "本档案为演示用模拟数据，实际部署由客户按模板提供并定期更新"
+}

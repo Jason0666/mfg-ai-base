@@ -1,0 +1,46 @@
+[
+  {
+    "keywords": ["良率对比", "A线", "下降", "上周", "主要原因"],
+    "sql": "SELECT date, line, SUM(output_qty) AS output_qty, SUM(good_qty) AS good_qty, SUM(defect_qty) AS defect_qty, ROUND(SUM(good_qty)*100.0/SUM(output_qty), 2) AS 良率, ROUND(AVG(downtime_min), 1) AS 平均停机分钟, material_batch AS 物料批次 FROM biz_prod_metric WHERE date BETWEEN '2026-09-07' AND '2026-09-13' AND line IN ('A线','B线') GROUP BY date, line, material_batch ORDER BY date, line",
+    "insight": "上周（9月7日-9月13日）A线良率明显低于B线：B线整周保持在约96.5%的正常水平，A线在9月11-13日良率骤降至88.6%-90.2%，较其正常水平（约97%）下降约7-8个百分点，9月14日换回原批次后恢复。A线下降时段的物料批次均为非常规批次 MB-NEW-0911，且同期B线及其他产线未受影响，可判定本次下滑由换料批次质量波动引起。",
+    "attribution": [
+      {
+        "factor": "换料批次质量波动（主因）",
+        "evidence": "9月11-13日A线使用新物料批次 MB-NEW-0911，三日良率分别为88.6%、89.4%、90.2%，较换料前约97%下降7-8个百分点；同期B线良率保持约96.5%，其他产线正常",
+        "impact": "三天合计较正常水平多产生不良约270件，平均日停机时间由约30分钟升至52-85分钟"
+      },
+      {
+        "factor": "设备/工艺因素（已排除）",
+        "evidence": "9月14日换回原物料批次后A线良率立即恢复至约97%，设备参数未调整，可排除设备故障",
+        "impact": "无"
+      }
+    ],
+    "chart": {"type": "line", "title": "上周 A线/B线 每日良率对比", "x_field": "date", "series": [{"field": "良率", "name": "良率", "group_by": "line"}]}
+  },
+  {
+    "keywords": ["趋势", "近30天", "各产线"],
+    "sql": "SELECT date, line, ROUND(SUM(good_qty)*100.0/SUM(output_qty), 2) AS 良率 FROM biz_prod_metric WHERE date BETWEEN '2026-08-18' AND '2026-09-16' GROUP BY date, line ORDER BY date, line",
+    "insight": "近30天（8月18日-9月16日）四条产线良率总体稳定在95%-98%区间。唯一显著异常为A线在9月11-13日出现连续三日低谷（最低88.6%），9月14日迅速恢复，与该时段A线更换物料批次 MB-NEW-0911 完全吻合；B线、C线、D线同期无类似波动。除该换料窗口外，各产线均处于受控状态。",
+    "attribution": [
+      {
+        "factor": "A线换料批次质量波动",
+        "evidence": "9月11-13日A线良率跌至88.6%-90.2%，为近30天唯一偏离正常区间的时段，对应物料批次 MB-NEW-0911",
+        "impact": "连续3天良率低于91%"
+      }
+    ],
+    "chart": {"type": "line", "title": "近30天各产线良率趋势", "x_field": "date", "series": [{"field": "良率", "name": "良率", "group_by": "line"}]}
+  },
+  {
+    "keywords": ["9月11", "9-11", "09-11", "指标对比", "生产指标"],
+    "sql": "SELECT line AS 产线, output_qty AS 产量, good_qty AS 合格数, defect_qty AS 不良数, yield_rate AS 良率, downtime_min AS 停机分钟, material_batch AS 物料批次 FROM biz_prod_metric WHERE date = '2026-09-11' ORDER BY line",
+    "insight": "2026年9月11日四条产线中仅A线异常：A线良率约88.6%，显著低于B线、C线、D线的约95%-97%正常水平；当日A线停机85分钟（其他产线约20-40分钟），且A线物料批次为非常规批次 MB-NEW-0911。四条线同日运行、仅换料的A线出问题，可判定为该批次物料质量波动导致的集中不良。",
+    "attribution": [
+      {
+        "factor": "A线新物料批次 MB-NEW-0911",
+        "evidence": "9月11日A线良率约88.6%（约137件不良），B/C/D线良率均在95%以上；A线物料批次为 MB-NEW-0911，其余产线为常规半月批次",
+        "impact": "A线当日不良数约为正常水平的3-4倍，停机85分钟"
+      }
+    ],
+    "chart": {"type": "bar", "title": "2026-09-11 各产线良率对比", "x_field": "产线", "series": [{"field": "良率", "name": "良率(%)"}]}
+  }
+]

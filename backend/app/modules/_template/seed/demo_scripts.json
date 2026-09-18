@@ -1,0 +1,32 @@
+[
+  {
+    "keywords": ["占位", "模板", "空转", "骨架"],
+    "answer": "_template 是 mfg-ai-base 的模块脚手架。它本身不携带业务能力，仅用于验证骨架链路：注册中心、SSE 流式输出、Schema 驱动的前端渲染、审计写入。复制此目录并实现 logic.py 即可创建新模块。",
+    "citations": [
+      {
+        "doc": "施工蓝图 §8.2 模块目录模板",
+        "page": 1,
+        "clause": "8.2"
+      }
+    ],
+    "structured": {
+      "answer": "_template 是 mfg-ai-base 的模块脚手架。它本身不携带业务能力，仅用于验证骨架链路：注册中心、SSE 流式输出、Schema 驱动的前端渲染、审计写入。复制此目录并实现 logic.py 即可创建新模块。",
+      "citations": [
+        {"doc": "施工蓝图 §8.2 模块目录模板", "page": 1, "clause": "8.2"}
+      ]
+    }
+  },
+  {
+    "keywords": ["M1", "验收", "DoD"],
+    "answer": "M1 里程碑 DoD 要求：docker compose up 后访问首页能看到 _template 模块卡片，点击进入工作台能完成一次空转调用（返回占位内容）。本模板承担的就是那个'空转'调用链路的演示角色。",
+    "citations": [
+      {"doc": "施工蓝图 §13 M1 骨架搭建", "page": 1, "clause": "M1-DoD"}
+    ],
+    "structured": {
+      "answer": "M1 里程碑 DoD 要求：docker compose up 后访问首页能看到 _template 模块卡片，点击进入工作台能完成一次空转调用（返回占位内容）。",
+      "citations": [
+        {"doc": "施工蓝图 §13 M1 骨架搭建", "page": 1, "clause": "M1-DoD"}
+      ]
+    }
+  }
+]

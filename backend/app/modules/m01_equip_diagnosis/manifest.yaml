@@ -1,0 +1,141 @@
+# M01 · 设备故障智能诊断（§9.1）
+# 字段约束见 backend/app/core/registry.py ModuleManifest
+
+code: m01_equip_diagnosis
+name: 设备故障智能诊断
+version: "1.0.0"
+category: knowledge
+industry: manufacturing
+order: 20                          # 首页排序，M04=10 在前
+icon: wrench
+summary: 输入故障现象，输出带出处的诊断结论、排查步骤与相似历史工单。
+
+# 痛点与价值
+pain_points:
+  - 设备维修高度依赖老师傅个人经验，经验随人退休流失
+  - 新人上手慢，故障响应时间长，停机损失大
+  - 历史工单散落 Excel/纸面，无法沉淀复用
+value_props:
+  - 知识库覆盖设备手册与历史工单，新人可独立排查
+  - 每条结论可溯源到手册条款页码或历史工单编号
+  - 平均故障定位时间从 2 小时缩短至 15 分钟
+
+# 输入 schema（驱动前端 SchemaInput）
+# 注：§9.1 原文为 context.recent_change / context.running_hours 嵌套结构；
+# 此处拍平为顶层字段以便前端通用 SchemaInput 渲染，logic.py 内部组装 context。
+input_schema:
+  type: object
+  required: [symptom]
+  properties:
+    equipment_code:
+      type: string
+      title: 设备编号（选填）
+      widget: select
+      options:
+        - CNC-07
+        - CNC-12
+        - IM-03
+        - IM-08
+        - AC-02
+        - AC-05
+      default: ""
+    symptom:
+      type: string
+      title: 故障现象描述
+      widget: textarea
+      placeholder: 例如：CNC-07 主轴在 8000rpm 以上出现周期性振动，加工表面有振纹
+    recent_change:
+      type: string
+      title: 近期变更（选填）
+      widget: text
+      placeholder: 例如：上周更换了主轴皮带
+    running_hours:
+      type: integer
+      title: 累计运行小时（选填）
+      default: 0
+
+# 输出 schema（驱动前端 SchemaOutput）
+output_schema:
+  type: object
+  properties:
+    causes:
+      type: array
+      title: 可能原因（按可能性排序）
+      items:
+        type: object
+        properties:
+          name: { type: string, title: 原因 }
+          probability: { type: number, title: 概率 }
+          evidence: { type: array, title: 证据, items: { type: string } }
+          source_refs:
+            type: array
+            title: 引用来源
+            items:
+              type: object
+              properties:
+                doc: { type: string, title: 文档/工单 }
+                version: { type: string, title: 版本 }
+                page: { type: integer, title: 页码 }
+                clause: { type: string, title: 条款号 }
+                wo_id: { type: string, title: 工单号 }
+    steps:
+      type: array
+      title: 排查步骤
+      items: { type: string }
+    spare_parts:
+      type: array
+      title: 建议备件
+      items:
+        type: object
+        properties:
+          name: { type: string, title: 备件名 }
+          model: { type: string, title: 型号 }
+          stock: { type: integer, title: 库存 }
+    cases:
+      type: array
+      title: 相似历史工单
+      items:
+        type: object
+        properties:
+          wo_id: { type: string, title: 工单号 }
+          root_cause: { type: string, title: 根因 }
+          solution: { type: string, title: 处理措施 }
+
+# 能力声明
+capabilities:
+  - rag
+  - citation
+  - structured_output
+
+# 检索配置（双路：设备手册 + 历史工单）
+retrieval:
+  collections: ["equip_manual", "work_order_history"]
+  top_k: 8
+  rerank_top_n: 5
+  filters: {}
+
+# 演示剧本（M2 DoD 要求走真实链路，剧本仅作为 LLM 不可用时的降级答案）
+demo:
+  suggested_questions:
+    - CNC-07 主轴 8000rpm 以上振动，加工表面有振纹
+    - IM-03 注塑机液压系统异响，油温偏高
+    - AC-02 空压机排气温度报警怎么排查
+  script_file: seed/demo_scripts.json
+
+# 落地条件（前端 DeployCard 必须展示）
+deployment_requirements:
+  data_needed:
+    - 设备台账（编号/型号/产线/累计运行小时）
+    - 设备手册与维修规程（PDF/Word/Markdown 均可，含版本号与生效日期）
+    - 近 12 个月维修工单（Excel 即可，格式不限，需含根因与处理措施字段）
+  integration: 无需对接 MES，文件级导入即可；后续可选只读对接设备台账库与工单系统
+  timeline: 数据齐备后 3 周上线
+  acceptance_criteria:
+    - 3 条推荐问题全部可跑通完整真实双路 RAG 链路（手册 + 工单）
+    - 输出结构化 JSON（causes/steps/spare_parts/cases），每条 cause 携带 source_refs
+    - source_refs 准确指向手册页码/条款号或历史工单号
+    - 检索为空时明确提示「知识库中未找到相关内容」，不编造
+  remarks: 若历史工单不足 100 条，建议先积累 1 个月再上线以提升相似工单召回准确率
+
+# 可选：模块专属接口（M01 暂无，设备台账下拉用 input_schema.options 静态提供）
+extra_endpoints: []
